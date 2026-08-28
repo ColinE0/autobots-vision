@@ -1,6 +1,6 @@
 # autobots-vision
 
-Camera code for our senior design robot (AutoBots, Team 1.09). This is where we
+Camera code for our senior design robot (AutoBots, Team 2.09). This is where we
 put the vision work so we can both pull it, run it, and not overwrite each
 other. The rest of the robot code lives separately; this repo is just the
 camera side.
