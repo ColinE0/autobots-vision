@@ -12,5 +12,3 @@ vision/     the vision modules
 tests/      whatever we can run without the robot
 tools/      scripts for testing against a webcam or a recorded clip
 ```
-
-Empty for now, we fill it in as we go.
