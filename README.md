@@ -8,9 +8,12 @@ and not overwrite each other. The rest of the robot code lives separately.
 
 ```
 hardware/   sensor drivers. So far the VL53L0X time-of-flight rangefinder
-vision/     the camera modules, once we have them in here
+vision/     the camera modules: stop sign + traffic light detectors, and
+            detector_geometric.py, the wrapper that speaks the robot's
+            detect() -> [Detection(label, area_frac)] contract
 tests/      whatever we can run without the robot
-tools/      bench scripts. tools/range_check.py is the live ToF readout
+tools/      bench scripts. tools/range_check.py is the live ToF readout,
+            tools/detect_preview.py is the live camera detection preview
 ```
 
 The tests run on any machine, no sensor needed, a fake stands in for it:

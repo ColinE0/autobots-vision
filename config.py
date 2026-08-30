@@ -36,3 +36,15 @@ RANGE_HYST_M = 0.10           # must clear HOLD + this to resume
 RANGE_SLOW_SCALE = 0.40       # forward speed multiplier at the hold line
 RANGE_CLEAR_S = 0.75          # clear this long before resuming
 RANGE_STALE_S = 1.0           # no valid read this long = ignore the ranger
+
+# Camera detection: vision/. Frames are downscaled to this width before any
+# detection work (full-resolution frames don't fit the Pi Zero 2W's budget).
+# Same name and value as the robot's config. Bring-up check: the stop sign's
+# octagon corners must still resolve at this width; raise it only with FPS
+# evidence from the actual Pi.
+DETECT_PROC_WIDTH = 320
+
+# Bench only, not read by the robot (it uses picamera2): OpenCV camera index
+# for tools/detect_preview.py. Index 2 on the laptop the detectors were tuned
+# on; adjust locally if the preview opens the wrong camera.
+CAMERA_SOURCE = 2

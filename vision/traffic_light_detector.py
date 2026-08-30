@@ -1,6 +1,5 @@
 import cv2
 import numpy as np
-import time
 # Limit detection to the useful part of the camera frame
 
 TOP_CUTOFF = 0.00      # Start searching at the very top of the frame
@@ -17,8 +16,6 @@ MAX_AREA_RATIO = 0.05     # Largest allowed candidate relative to the full frame
 
 MIN_COLOR_RATIO = 0.08    # At least 8% of the candidate must contain the winning color
 WINNER_RATIO = 1.20       # Winning color must be 20% stronger than the second-best color
-
-HOLD_TIME = 0.25          # Keep a detection for 0.25 seconds to reduce flickering
 
 
 # Red light brightness requirements
@@ -75,11 +72,6 @@ GREEN_UPPER = np.array([95, 255, 255])
 OPEN_KERNEL = np.ones((3, 3), np.uint8)
 CLOSE_KERNEL = np.ones((5, 5), np.uint8)
 YELLOW_DILATE_KERNEL = np.ones((5, 5), np.uint8)
-
-# Store the last result briefly to reduce detection flicker
-
-last_detection = None
-last_analysis_time = 0.0
 
 # Helper functions for ROI and color masks
 
@@ -152,17 +144,22 @@ def get_single_color_mask(hsv, color):
     return np.zeros(hsv.shape[:2], dtype=np.uint8)
 
 
-def find_bright_candidates(frame):
-    """Find bright red, yellow, or green regions that could be lights."""
+def find_bright_candidates(frame, hsv=None):
+    """Find bright red, yellow, or green regions that could be lights.
+
+    hsv optionally carries a precomputed blurred HSV frame so one blur and
+    conversion can be shared between both detectors on the Pi Zero 2 W.
+    """
 
     h, w = frame.shape[:2]
     frame_area = w * h
 
-    # Blur slightly to reduce camera noise
-    blurred = cv2.GaussianBlur(frame, (3, 3), 0)
+    if hsv is None:
+        # Blur slightly to reduce camera noise
+        blurred = cv2.GaussianBlur(frame, (3, 3), 0)
 
-    # HSV separates color from brightness better than BGR
-    hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
+        # HSV separates color from brightness better than BGR
+        hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
 
     # Keep only pixels that are sufficiently saturated and bright
     intense_mask = cv2.inRange(
@@ -271,13 +268,6 @@ def validate_light_color(hsv, color_mask, color):
     # Percentage of pixels bright enough to count as strongly illuminated
     bright_ratio = float(
         np.mean(values >= bright_pixel_value)
-    )
-
-    print(
-        f"{color} LIGHT TEST | "
-        f"meanV:{mean_value:.1f} | "
-        f"peakV:{peak_value:.1f} | "
-        f"brightRatio:{bright_ratio:.2f}"
     )
 
     # All three brightness conditions must pass
@@ -567,24 +557,18 @@ def analyze_candidate_roi(frame, box):
     }
 
 
-def detect_traffic_light(frame):
-    """Run the complete traffic-light detection process."""
+def detect_traffic_light(frame, hsv=None):
+    """Run the complete traffic-light detection process.
 
-    global last_detection
-    global last_analysis_time
-
-    current_time = time.time()
-
-    # Reuse the previous result for 0.25 seconds to reduce flicker
-    if (
-        last_detection is not None
-        and current_time - last_analysis_time < HOLD_TIME
-    ):
-        return last_detection
+    Returns the strongest light in this frame, or None. Flicker smoothing is
+    the caller's job (the robot runs K-of-N temporal confirmation), so this
+    function keeps no state between frames.
+    """
 
     # First find rough bright-color candidate regions
     candidates = find_bright_candidates(
-        frame
+        frame,
+        hsv
     )
 
     valid_lights = []
@@ -604,17 +588,10 @@ def detect_traffic_light(frame):
 
     # No valid traffic light was found
     if not valid_lights:
-        last_detection = None
-        last_analysis_time = current_time
         return None
 
     # If multiple lights survive, choose the strongest one
-    best_light = max(
+    return max(
         valid_lights,
         key=lambda light: light["power"]
     )
-
-    last_detection = best_light
-    last_analysis_time = current_time
-
-    return best_light
