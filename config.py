@@ -44,7 +44,14 @@ RANGE_STALE_S = 1.0           # no valid read this long = ignore the ranger
 # evidence from the actual Pi.
 DETECT_PROC_WIDTH = 320
 
-# Bench only, not read by the robot (it uses picamera2): OpenCV camera index
-# for tools/detect_preview.py. Index 2 on the laptop the detectors were tuned
-# on; adjust locally if the preview opens the wrong camera.
-CAMERA_SOURCE = 2
+# Camera for tools/detect_preview.py, same names and values as the robot:
+#   'csi'  Pi camera (Arducam IMX219) via picamera2 (apt: python3-picamera2)
+#   'usb'  laptop / USB webcam via OpenCV; CAMERA_INDEX applies only here
+#          (index 2 on the laptop the detectors were tuned on)
+# 320x240 capture on purpose: it is the detector's working width, so the
+# CSI ISP scales for free and the downscale becomes a no-op.
+CAMERA_BACKEND = 'csi'
+CAMERA_INDEX = 0             # usb only
+CAMERA_WIDTH = 320
+CAMERA_HEIGHT = 240
+CAMERA_FPS = 30
