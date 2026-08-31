@@ -15,6 +15,7 @@ have). With a display the window shows boxes, scaled 2x, q to quit. Over
 SSH with no display it falls back to printing one line whenever the
 detections change, plus an FPS report every 2 s. Ctrl+C to quit.
 """
+import os
 import sys
 import pathlib
 import time
@@ -82,7 +83,16 @@ def main():
     else:
         read, close = open_usb()
 
-    headless = False
+    # Decide up front: cv2.imshow's Qt backend ABORTS the process (not a
+    # catchable exception) when there is no display, so an SSH session must
+    # never reach it.
+    headless = not (
+        os.environ.get('DISPLAY')
+        or os.environ.get('WAYLAND_DISPLAY')
+    ) and sys.platform != 'win32'
+
+    if headless:
+        print("No display found, printing detections instead. Ctrl+C to quit.")
     last_line = None
     frames = 0
     fps_t0 = time.monotonic()
@@ -197,17 +207,10 @@ def main():
                 interpolation=cv2.INTER_NEAREST
             )
 
-            try:
-                cv2.imshow("Subsystem Pipeline", display)
+            cv2.imshow("Subsystem Pipeline", display)
 
-                if cv2.waitKey(1) & 0xFF == ord("q"):
-                    break
-
-            except cv2.error:
-                # No display (SSH session): switch to console output.
-                headless = True
-                print("No display found, printing detections instead. "
-                      "Ctrl+C to quit.")
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
 
     except KeyboardInterrupt:
         pass
