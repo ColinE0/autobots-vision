@@ -14,6 +14,9 @@ only works at full webcam resolution is a detection the robot does not
 have). With a display the window shows boxes, scaled 2x, q to quit. Over
 SSH with no display it falls back to printing one line whenever the
 detections change, plus an FPS report every 2 s. Ctrl+C to quit.
+
+Console lines are timestamped, and in headless mode they are also appended
+to detect_preview.log in the repo folder, so bench runs leave a record.
 """
 import os
 import sys
@@ -91,8 +94,22 @@ def main():
         or os.environ.get('WAYLAND_DISPLAY')
     ) and sys.platform != 'win32'
 
+    log_file = None
+
     if headless:
+        log_path = pathlib.Path(__file__).resolve().parents[1] / 'detect_preview.log'
+        log_file = open(log_path, 'a')
+        log_file.write(time.strftime('--- session %Y-%m-%d %H:%M:%S\n'))
         print("No display found, printing detections instead. Ctrl+C to quit.")
+        print(f"Logging to {log_path}")
+
+    def emit(line):
+        line = time.strftime('%H:%M:%S') + '  ' + line
+        print(line)
+        if log_file is not None:
+            log_file.write(line + '\n')
+            log_file.flush()
+
     last_line = None
     frames = 0
     fps_t0 = time.monotonic()
@@ -131,7 +148,7 @@ def main():
             now = time.monotonic()
 
             if now - fps_t0 >= 2.0:
-                print(f"{frames / (now - fps_t0):.1f} FPS")
+                emit(f"{frames / (now - fps_t0):.1f} FPS")
                 frames = 0
                 fps_t0 = now
 
@@ -139,7 +156,7 @@ def main():
                 line = describe(stop_sign_data, traffic_light_data)
 
                 if line != last_line:
-                    print(line)
+                    emit(line)
                     last_line = line
 
                 continue
@@ -217,6 +234,10 @@ def main():
 
     finally:
         close()
+
+        if log_file is not None:
+            log_file.close()
+
         cv2.destroyAllWindows()
 
 
