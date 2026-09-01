@@ -68,6 +68,12 @@ CAMERA_LOCK_AWB = False
 # real camera with tools/test_camera.py and flip this one line.
 DETECTOR_BACKEND = 'classical'
 DETECT_IGNORE_BOTTOM_FRAC = 0.25   # bottom of frame is floor/line, not signs
+LIGHT_S_MIN = 100   # HSV saturation floor for a lamp; rejects washed-out grey
+LIGHT_V_MIN = 170   # HSV brightness floor. THIS is what separates a LIT lamp from
+                    # an unlit coloured lens. Was 80, which a red/yellow/green lens
+                    # clears in ordinary room light, so a 3-lens traffic-light module
+                    # reported all three colours at once (bench, 2026-09-01). 170
+                    # matches the geometric backend's MIN_VALUE.
 DETECT_MIN_AREA_FRAC = 0.002  # ignore blobs smaller than 0.2% of the frame
 CONFIRM_FRAMES_N = 3          # TemporalFilter window ...
 CONFIRM_FRAMES_K = 2          # ... act on K of the last N frames

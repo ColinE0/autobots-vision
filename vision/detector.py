@@ -39,25 +39,30 @@ import numpy as np
 # more than it saves, and the 50 Hz control / 100 Hz IR threads need cores.
 cv2.setNumThreads(2)
 
-# HSV ranges (OpenCV scale: H 0-180, S/V 0-255)
-_LIGHT_S_MIN = 100
-_LIGHT_V_MIN = 80
-RED_BANDS = [((0, _LIGHT_S_MIN, _LIGHT_V_MIN), (10, 255, 255)),
-             ((170, _LIGHT_S_MIN, _LIGHT_V_MIN), (180, 255, 255))]
-YELLOW_BANDS = [((18, _LIGHT_S_MIN, _LIGHT_V_MIN), (35, 255, 255))]
-GREEN_BANDS = [((40, _LIGHT_S_MIN, _LIGHT_V_MIN), (90, 255, 255))]
+# HSV ranges (OpenCV scale: H 0-180, S/V 0-255). The hues are fixed by
+# physics; the saturation and brightness floors are the tuning knobs and
+# live in config as LIGHT_S_MIN / LIGHT_V_MIN. The V floor is what
+# separates a LIT lamp from an unlit coloured lens, so it is not a
+# constant to bury in a module.
+def _light_bands(s_min, v_min):
+    return {
+        'red': [((0, s_min, v_min), (10, 255, 255)),
+                ((170, s_min, v_min), (180, 255, 255))],
+        'yellow': [((18, s_min, v_min), (35, 255, 255))],
+        'green': [((40, s_min, v_min), (90, 255, 255))],
+    }
 # White STOP text/border: nearly colorless and bright (S under 70, V over 170).
 WHITE_LOW, WHITE_HIGH = (0, 0, 170), (180, 70, 255)
 
 
 def _prep(bands):
-    """Build the inRange ndarrays once at import, not once per frame."""
+    """Build the inRange ndarrays once per detector, not once per frame."""
     return [(np.array(lo, np.uint8), np.array(hi, np.uint8)) for lo, hi in bands]
 
 
-_RED = _prep(RED_BANDS)
-_YELLOW = _prep(YELLOW_BANDS)
-_GREEN = _prep(GREEN_BANDS)
+def _prep_all(cfg):
+    raw = _light_bands(cfg.LIGHT_S_MIN, cfg.LIGHT_V_MIN)
+    return {k: _prep(v) for k, v in raw.items()}
 _WHITE_LOW = np.array(WHITE_LOW, np.uint8)
 _WHITE_HIGH = np.array(WHITE_HIGH, np.uint8)
 
@@ -79,6 +84,7 @@ class Detector:
     def __init__(self, cfg):
         self.cfg = cfg
         self._kernel = np.ones((3, 3), np.uint8)
+        self._bands = _prep_all(cfg)
 
     def detect(self, frame_bgr):
         cfg = self.cfg
@@ -97,9 +103,9 @@ class Detector:
         white = None                          # built only if a red blob needs it
 
         best = {}
-        for color, prepped in (('red', _RED),
-                               ('yellow_light', _YELLOW),
-                               ('green_light', _GREEN)):
+        for color, prepped in (('red', self._bands['red']),
+                               ('yellow_light', self._bands['yellow']),
+                               ('green_light', self._bands['green'])):
             mask = cv2.morphologyEx(_mask(hsv, prepped), cv2.MORPH_OPEN, self._kernel)
             contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL,
                                            cv2.CHAIN_APPROX_SIMPLE)
@@ -160,6 +166,7 @@ class YoloDetector:
         from ultralytics import YOLO    # only installed for the A/B test
         self.cfg = cfg
         self._model = YOLO(cfg.YOLO_MODEL_DIR)
+        self._bands = _prep_all(cfg)
 
     def detect(self, frame_bgr):
         cfg = self.cfg
@@ -175,7 +182,7 @@ class YoloDetector:
             if name == 'stop sign':
                 label = 'stop_sign'
             elif name == 'traffic light':
-                label = _light_color(frame_bgr[y1:y2, x1:x2])
+                label = _light_color(frame_bgr[y1:y2, x1:x2], self._bands)
                 if label is None:
                     continue
             else:
@@ -185,14 +192,14 @@ class YoloDetector:
         return [Detection(k, v) for k, v in best.items()]
 
 
-def _light_color(crop_bgr):
+def _light_color(crop_bgr, bands):
     if crop_bgr.size == 0:
         return None
     hsv = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2HSV)
     counts = {
-        'red_light': cv2.countNonZero(_mask(hsv, _RED)),
-        'yellow_light': cv2.countNonZero(_mask(hsv, _YELLOW)),
-        'green_light': cv2.countNonZero(_mask(hsv, _GREEN)),
+        'red_light': cv2.countNonZero(_mask(hsv, bands['red'])),
+        'yellow_light': cv2.countNonZero(_mask(hsv, bands['yellow'])),
+        'green_light': cv2.countNonZero(_mask(hsv, bands['green'])),
     }
     best = max(counts, key=counts.get)
     return best if counts[best] > 0 else None
