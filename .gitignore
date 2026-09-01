@@ -1,5 +1,4 @@
 __pycache__/
 *.pyc
 .pytest_cache/
-detect_preview.log
-test_camera.log
+*.log
