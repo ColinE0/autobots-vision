@@ -11,7 +11,11 @@ BOTTOM_CUTOFF = 0.75   # Stop searching after 75% of the frame height
 MIN_SATURATION = 110   # Minimum color intensity; rejects gray/washed-out objects
 MIN_VALUE = 170        # Minimum brightness; rejects dark colored objects
 
-MIN_AREA_RATIO = 0.00020  # Smallest allowed candidate relative to the full frame
+MIN_AREA_RATIO = 0.002    # Smallest allowed candidate relative to the full frame.
+                          # Matches the classical backend's DETECT_MIN_AREA_FRAC so
+                          # an A/B compares like with like. At 0.00020 the floor was
+                          # ~15 px at 320x240 and single specular glints strobed in
+                          # and out of the result every frame.
 MAX_AREA_RATIO = 0.05     # Largest allowed candidate relative to the full frame
 
 MIN_COLOR_RATIO = 0.08    # At least 8% of the candidate must contain the winning color
