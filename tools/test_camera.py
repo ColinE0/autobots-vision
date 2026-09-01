@@ -11,10 +11,10 @@ Lines are timestamped and appended to test_camera.log in the repo folder.
 The session header carries the git revision plus the camera and detector
 backends, so an A/B run months later is attributable to a code state.
 
-Note the reporting cadence: the label column shows the detections from the
-single frame that happened to land on the 2 s boundary, not everything seen
-in between. For watching a hand-held prop, tools/detect_preview.py prints on
-every change instead.
+Detections print when the SET OF LABELS changes, not on a timer, so a
+hand-held prop reads as transitions rather than a 1-in-60 sample. The area
+percentages shown are from the frame that triggered the change. FPS is
+reported separately every 2 s.
 """
 import sys, time, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
@@ -34,6 +34,7 @@ def main():
     print(f"camera={config.CAMERA_BACKEND}  detector={config.DETECTOR_BACKEND}. "
           f"Ctrl+C to quit. Logging to {log.path}\n")
     last_id, n, t0 = -1, 0, time.monotonic()
+    last_key = None
     try:
         while True:
             fid, frame = cam.read()
@@ -43,11 +44,17 @@ def main():
             last_id = fid
             dets = det.detect(frame)
             n += 1
+            # Key on the labels alone. area_frac jitters every frame, so
+            # keying on the printed string would emit at the frame rate.
+            key = tuple(d.label for d in dets)
+            if key != last_key:
+                labels = ', '.join(
+                    f"{d.label}({d.area_frac*100:.1f}%)" for d in dets) or '-'
+                print(log.line(labels, echo=False), flush=True)
+                last_key = key
             dt = time.monotonic() - t0
             if dt >= 2.0:
-                fps = n / dt
-                labels = ', '.join(f"{d.label}({d.area_frac*100:.1f}%)" for d in dets) or '-'
-                print(log.line(f"{fps:5.1f} FPS   {labels}", echo=False), flush=True)
+                print(log.line(f"{n / dt:5.1f} FPS", echo=False), flush=True)
                 n, t0 = 0, time.monotonic()
     except KeyboardInterrupt:
         print()
