@@ -15,8 +15,9 @@ have). With a display the window shows boxes, scaled 2x, q to quit. Over
 SSH with no display it falls back to printing one line whenever the
 detections change, plus an FPS report every 2 s. Ctrl+C to quit.
 
-Console lines are timestamped, and in headless mode they are also appended
-to detect_preview.log in the repo folder, so bench runs leave a record.
+Console lines are timestamped and appended to detect_preview.log in the
+repo folder, windowed or headless, so bench runs leave a record. The
+session header carries the git revision and the camera settings.
 """
 import os
 import sys
@@ -28,6 +29,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import cv2
 
 import config
+from tools.sessionlog import SessionLog
 from vision.detector_geometric import boxes_represent_same_object
 from vision.stop_sign_detector import detect_stop_sign
 from vision.traffic_light_detector import detect_traffic_light
@@ -94,21 +96,17 @@ def main():
         or os.environ.get('WAYLAND_DISPLAY')
     ) and sys.platform != 'win32'
 
-    log_file = None
+    log = SessionLog('detect_preview',
+                     f"camera={config.CAMERA_BACKEND} "
+                     f"proc_width={config.DETECT_PROC_WIDTH} "
+                     f"headless={headless}")
 
     if headless:
-        log_path = pathlib.Path(__file__).resolve().parents[1] / 'detect_preview.log'
-        log_file = open(log_path, 'a')
-        log_file.write(time.strftime('--- session %Y-%m-%d %H:%M:%S\n'))
         print("No display found, printing detections instead. Ctrl+C to quit.")
-        print(f"Logging to {log_path}")
+    print(f"Logging to {log.path}")
 
     def emit(line):
-        line = time.strftime('%H:%M:%S') + '  ' + line
-        print(line)
-        if log_file is not None:
-            log_file.write(line + '\n')
-            log_file.flush()
+        print(log.line(line, echo=False), flush=True)
 
     last_line = None
     frames = 0
@@ -234,10 +232,7 @@ def main():
 
     finally:
         close()
-
-        if log_file is not None:
-            log_file.close()
-
+        log.close()
         cv2.destroyAllWindows()
 
 
