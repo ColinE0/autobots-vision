@@ -4,19 +4,15 @@ import time
 
 
 # Detection region
-# Only search the upper portion of the image where traffic lights are expected.
-# This reduces false positives from the floor / robot body / nearby objects.
 TOP_CUTOFF = 0.00
 BOTTOM_CUTOFF = 0.75
 
 
 # Basic candidate requirements
-# These thresholds control which bright colored blobs are large enough and
-# strong enough to be considered possible traffic lights.
 MIN_SATURATION = 110
 MIN_VALUE = 170
 
-MIN_AREA_RATIO = 0.00020
+MIN_AREA_RATIO = 0.00008
 MAX_AREA_RATIO = 0.05
 
 MIN_COLOR_RATIO = 0.08
@@ -25,20 +21,23 @@ WINNER_RATIO = 1.20
 HOLD_TIME = 0.25
 
 
-# Red light brightness requirements
-RED_MIN_MEAN_VALUE = 215
-RED_MIN_PEAK_VALUE = 240
-RED_MIN_BRIGHT_RATIO = 0.40
-RED_BRIGHT_PIXEL_VALUE = 220
+# Red light candidate + brightness requirements
+# Distant red LEDs lose apparent saturation/brightness and shrink to only a
+# handful of pixels, so red gets a looser first-pass gate than nearby lights.
+RED_CANDIDATE_MIN_SATURATION = 75
+RED_CANDIDATE_MIN_VALUE = 130
+
+RED_MIN_MEAN_VALUE = 180
+RED_MIN_PEAK_VALUE = 220
+RED_MIN_BRIGHT_RATIO = 0.18
+RED_BRIGHT_PIXEL_VALUE = 195
 
 
 # Yellow light brightness requirements
-# Yellow is intentionally looser than red/green because a bright yellow LED
-# often loses saturation and becomes pale or nearly white in the camera.
 YELLOW_MIN_MEAN_VALUE = 175
 YELLOW_MIN_PEAK_VALUE = 220
-YELLOW_MIN_BRIGHT_RATIO = 0.18
-YELLOW_BRIGHT_PIXEL_VALUE = 195
+YELLOW_MIN_BRIGHT_RATIO = 0.2
+YELLOW_BRIGHT_PIXEL_VALUE = 205
 
 # Yellow gets its own looser saturation gate because a real LED often
 # washes toward white in the center.
@@ -51,12 +50,16 @@ YELLOW_CANDIDATE_MIN_VALUE = 150
 # ordinary solid-yellow objects.
 YELLOW_WHITE_MIN_VALUE = 230
 YELLOW_WHITE_MAX_SATURATION = 90
-YELLOW_MIN_WHITE_CORE_RATIO = 0.01
+YELLOW_MIN_WHITE_CORE_RATIO = 0.04
 
-# Extra yellow glow metrics
-# These are used for ranking, not just hard rejection.
-# A real illuminated bulb should contain a broader region of very bright pixels.
-# A yellow button may have one shiny highlight, but usually not a distributed glow.
+# Hard glow requirements. These reject solid/shiny yellow objects that only
+# have a tiny reflection instead of behaving like an illuminated LED.
+YELLOW_MIN_HOT_RATIO = 0.25
+YELLOW_MIN_SUPERHOT_RATIO = 0.04
+
+# Extra glow metrics used to make a real illuminated bulb outrank
+# small yellow buttons / glossy reflections. These do not hard-reject
+# the LED; they mainly affect which valid yellow candidate wins.
 YELLOW_HOT_PIXEL_VALUE = 235
 YELLOW_SUPERHOT_PIXEL_VALUE = 248
 
@@ -100,9 +103,7 @@ YELLOW_DILATE_KERNEL = np.ones((5, 5), np.uint8)
 YELLOW_WHITE_NEIGHBOR_KERNEL = np.ones((7, 7), np.uint8)
 
 
-# Detection memory used to reduce flickering
-# When a valid light is found, keep returning it briefly instead of immediately
-# dropping the detection if one frame is noisy.
+# Previous detection used to reduce flickering
 last_detection = None
 last_analysis_time = 0.0
 
@@ -144,11 +145,7 @@ def clean_mask(mask):
 
 
 def get_color_masks(hsv):
-    """Create separate red, yellow, and green HSV masks.
-
-    Red uses two hue ranges because HSV red wraps around the hue scale:
-    one range is near 0 degrees and the other is near 180.
-    """
+    """Create separate red, yellow, and green masks."""
 
     red1 = cv2.inRange(
         hsv,
@@ -203,12 +200,7 @@ def get_single_color_mask(hsv, color):
 
 
 def get_yellow_with_white_core(hsv, yellow_mask):
-    """Add white-hot pixels that are directly connected to yellow.
-
-    Very bright yellow LEDs can become low-saturation/white in the center.
-    These pixels are only accepted if they are touching a yellow region,
-    which helps avoid treating unrelated white objects as part of the bulb.
-    """
+    """Add white-hot pixels that are directly connected to yellow."""
 
     white_core = cv2.inRange(
         hsv,
@@ -236,12 +228,7 @@ def get_yellow_with_white_core(hsv, yellow_mask):
 
 
 def find_bright_candidates(frame):
-    """Find bright colored regions that could be traffic lights.
-
-    Red and green use the normal global saturation/brightness gate.
-    Yellow uses a separate, looser gate so the washed-out center of a real
-    yellow LED is not accidentally removed.
-    """
+    """Find bright colored regions that could be traffic lights."""
 
     h, w = frame.shape[:2]
     frame_area = w * h
@@ -270,8 +257,16 @@ def find_bright_candidates(frame):
         yellow
     )
 
-    # Red/green keep the normal strong saturation+brightness requirement.
-    red_candidate = cv2.bitwise_and(red, intense_mask)
+    # Red gets its own looser first-pass gate so a small/distant red LED is not
+    # deleted before the more detailed brightness validation below.
+    red_gate = cv2.inRange(
+        hsv,
+        np.array([0, RED_CANDIDATE_MIN_SATURATION, RED_CANDIDATE_MIN_VALUE]),
+        np.array([180, 255, 255])
+    )
+    red_candidate = cv2.bitwise_and(red, red_gate)
+
+    # Green keeps the normal strong saturation+brightness requirement.
     green_candidate = cv2.bitwise_and(green, intense_mask)
 
     # Yellow needs a separate gate. A glowing yellow LED can become pale/white
@@ -332,16 +327,7 @@ def find_bright_candidates(frame):
 
 
 def validate_light_color(hsv, color_mask, color):
-    """Return True when the color region is bright enough to behave like a lit bulb.
-
-    Validation uses:
-    - mean brightness
-    - high-percentile brightness
-    - fraction of pixels above a bright threshold
-
-    Requiring all three helps reject colored surfaces that match the hue
-    but are not actually illuminated.
-    """
+    """Return True when the colored region behaves like an illuminated bulb."""
 
     values = hsv[:, :, 2][color_mask > 0]
 
@@ -383,12 +369,7 @@ def validate_light_color(hsv, color_mask, color):
 
 
 def get_precise_bulb_box(frame, original_box, color):
-    """Refine the rough candidate box around the illuminated bulb.
-
-    The original contour can include extra nearby pixels. This function rebuilds
-    a stronger color/brightness mask inside the candidate and chooses the best
-    internal contour to produce a tighter bulb bounding box.
-    """
+    """Refine the rough candidate box around the illuminated bulb."""
 
     x, y, box_w, box_h = original_box
 
@@ -551,12 +532,7 @@ def get_precise_bulb_box(frame, original_box, color):
 
 
 def analyze_candidate_roi(frame, box):
-    """Classify one candidate as red, yellow, or green.
-
-    Each color gets a score based mainly on the brightest part of the region.
-    Raw pixel count is intentionally NOT multiplied into the score because that
-    previously let large solid-colored objects beat small glowing LEDs.
-    """
+    """Classify a candidate as red, yellow, or green."""
 
     x, y, box_w, box_h = box
 
@@ -596,8 +572,14 @@ def analyze_candidate_roi(frame, box):
     yellow_bright = cv2.bitwise_and(yellow, yellow_gate)
     yellow_glow_mask = cv2.bitwise_or(yellow_bright, yellow_white_core)
 
+    red_gate = cv2.inRange(
+        hsv,
+        np.array([0, RED_CANDIDATE_MIN_SATURATION, RED_CANDIDATE_MIN_VALUE]),
+        np.array([180, 255, 255])
+    )
+
     masks = {
-        "RED": cv2.bitwise_and(red, intense_mask),
+        "RED": cv2.bitwise_and(red, red_gate),
         "YELLOW": yellow_glow_mask,
         "GREEN": cv2.bitwise_and(green, intense_mask)
     }
@@ -616,17 +598,16 @@ def analyze_candidate_roi(frame, box):
         threshold = np.percentile(values, 85)
         strongest = values[values >= threshold]
 
-        # Do NOT multiply by pixel count.
-        # Earlier versions did this and a large solid-yellow object could beat
-        # the actual traffic light simply because it covered more pixels.
+        # Do NOT multiply by pixel count: that made a large yellow object
+        # beat a small glowing bulb just because it occupied more area.
         mean_strong = float(np.mean(strongest))
         peak = float(np.percentile(values, 95))
         powers[color] = 0.65 * mean_strong + 0.35 * peak
 
         if color == "YELLOW":
-            # A real illuminated yellow bulb should have MANY very bright pixels,
-            # not just one shiny reflection. These ratios measure how much of the
-            # detected yellow region behaves like a real light source.
+            # A real illuminated bulb normally has a *region* of very bright
+            # pixels, not just one shiny specular dot. Give that glow a strong
+            # preference so a small yellow button cannot beat the lamp.
             roi_area_safe = max(box_w * box_h, 1)
             core_ratio = cv2.countNonZero(yellow_white_core) / roi_area_safe
 
@@ -638,9 +619,8 @@ def analyze_candidate_roi(frame, box):
                 hot_ratio = 0.0
                 superhot_ratio = 0.0
 
-            # Reward distributed glow.
-            # This is what helps the real yellow bulb outrank yellow buttons,
-            # paint, plastic, or small reflective highlights.
+            # Strongly reward a broad glowing region. A button can have one
+            # bright reflection, but the lit bulb should have many hot pixels.
             powers[color] += (90.0 * core_ratio)
             powers[color] += (45.0 * hot_ratio)
             powers[color] += (35.0 * superhot_ratio)
@@ -679,6 +659,27 @@ def analyze_candidate_roi(frame, box):
         if white_core_ratio < YELLOW_MIN_WHITE_CORE_RATIO:
             return None
 
+        # Do not merely *reward* yellow glow during ranking -- require it.
+        # A plastic yellow button can contain one bright reflection, but a lit
+        # LED should have a meaningful region of hot and super-hot pixels.
+        yellow_values = hsv[:, :, 2][masks["YELLOW"] > 0]
+
+        if yellow_values.size == 0:
+            return None
+
+        hot_ratio = float(
+            np.mean(yellow_values >= YELLOW_HOT_PIXEL_VALUE)
+        )
+        superhot_ratio = float(
+            np.mean(yellow_values >= YELLOW_SUPERHOT_PIXEL_VALUE)
+        )
+
+        if hot_ratio < YELLOW_MIN_HOT_RATIO:
+            return None
+
+        if superhot_ratio < YELLOW_MIN_SUPERHOT_RATIO:
+            return None
+
     if not validate_light_color(
         hsv,
         masks[winner_color],
@@ -691,10 +692,7 @@ def analyze_candidate_roi(frame, box):
     # are both technically valid in the same frame.
     glow_score = winner_power
 
-    # Extra final yellow glow ranking
-    # This second glow score is used when multiple valid candidates are present.
-    # It gives the actual illuminated bulb another advantage over small objects
-    # that technically passed the earlier yellow thresholds.
+    #######NEW CODE FOR YELLOW GLOW SCORING#######
     
     if winner_color == "YELLOW":
         yellow_values = hsv[:, :, 2][masks["YELLOW"] > 0]
@@ -734,12 +732,7 @@ def analyze_candidate_roi(frame, box):
 
 
 def detect_traffic_light(frame):
-    """Detect and return the strongest valid traffic light in the frame.
-
-    Candidate regions are analyzed independently, then the result with the best
-    glow score is selected. Yellow receives extra glow-based ranking because it
-    is the color most likely to be confused with solid objects.
-    """
+    """Detect the strongest valid traffic light."""
 
     global last_detection
     global last_analysis_time
