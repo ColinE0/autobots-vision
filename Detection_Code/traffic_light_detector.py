@@ -1,24 +1,3 @@
-"""
-Traffic Light Detector (OpenCV)
-
-High-level pipeline:
-1. Blur the frame slightly and convert it to HSV.
-2. Build separate red, yellow, and green color masks.
-3. Keep only bright colored regions inside the allowed detection area.
-4. Treat yellow differently because real yellow LEDs often wash toward white.
-5. Validate each candidate using brightness statistics.
-6. Refine the bounding box around the strongest bulb-shaped color region.
-7. Rank valid candidates and return the light that behaves most like a real glowing bulb.
-8. Briefly hold the last detection to reduce flicker between frames.
-
-Important yellow behavior:
-- Solid yellow objects used to win because they had many yellow pixels.
-- The detector now avoids rewarding raw pixel count.
-- Yellow LEDs are allowed to include a white-hot center.
-- Yellow candidates are ranked using glow distribution so a real bulb can beat
-  small yellow buttons or glossy reflections.
-"""
-
 import cv2
 import numpy as np
 import time
