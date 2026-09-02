@@ -1,23 +1,3 @@
-"""
-Stop Sign Detector (OpenCV)
-
-High-level pipeline:
-1. Convert the camera frame to HSV and isolate red pixels.
-2. Remove tiny/noisy red regions with morphology.
-3. Check each remaining red contour for reasonable stop-sign size/proportions.
-4. Reject regions that behave like illuminated red traffic lights.
-   - normal high brightness
-   - white/blown-out LED core
-   - center much brighter than the outer red region
-5. Approximate the remaining contour as an 8-sided polygon.
-6. Score its angles, side lengths, aspect ratio, and contour match.
-7. Return the strongest valid stop-sign candidate.
-
-Important:
-A distant circular traffic-light bulb can look polygonal at low resolution.
-For that reason, red-light rejection happens BEFORE octagon fitting.
-"""
-
 import cv2
 import numpy as np
 import math
