@@ -17,9 +17,9 @@ import time
 
 import cv2
 
-# CSI AWB lock: seconds of auto-white-balance settling before the gains are
-# frozen (only when CAMERA_LOCK_AWB is set).
-_LOCK_WARMUP_S = 1.0   # let AWB and AE settle before freezing either
+# CSI AWB/AE lock: seconds of settling before the values are frozen (only
+# when CAMERA_LOCK_AWB / CAMERA_LOCK_AE is set), at startup and on relock().
+_LOCK_WARMUP_S = 1.0
 
 
 class UsbCamera:
@@ -94,6 +94,7 @@ class CsiCamera:
                 'CSI camera started but the first capture failed. Check the '
                 'flex ribbon seating and `rpicam-hello --list-cameras`.')
         self.locked = {}
+        self._relock_at = None
         if cfg.CAMERA_LOCK_AWB or cfg.CAMERA_LOCK_AE:
             # Freeze white balance and/or exposure once they settle. AWB left
             # live lets a big red/green prop drag every hue with it mid-run.
@@ -102,30 +103,56 @@ class CsiCamera:
             # depends on framing rather than on the lamp. Bench 2026-09-01,
             # a red lamp only detected after the camera was nudged upward.
             time.sleep(_LOCK_WARMUP_S)
-            md = self._picam.capture_metadata()
-            controls = {}
-            # Only freeze what the sensor actually reports. A missing key is
-            # not worth crashing the camera over; the run just stays auto for
-            # that control, and the header records what was locked.
-            if cfg.CAMERA_LOCK_AWB and 'ColourGains' in md:
-                controls['AwbEnable'] = False
-                controls['ColourGains'] = md['ColourGains']
-            if cfg.CAMERA_LOCK_AE and {'ExposureTime', 'AnalogueGain'} <= md.keys():
-                controls['AeEnable'] = False
-                controls['ExposureTime'] = md['ExposureTime']
-                controls['AnalogueGain'] = md['AnalogueGain']
-            if controls:
-                self._picam.set_controls(controls)
-            # Keep the frozen values: two runs are only comparable if they
-            # were taken at the same exposure, so callers can log them.
-            self.locked = {k: v for k, v in controls.items()
-                           if k not in ('AwbEnable', 'AeEnable')}
+            self._freeze()
         self._lock = threading.Lock()
         self._frame = frame
         self._frame_id = 1
         self._run = True
         self._thread = threading.Thread(target=self._loop, name='camera', daemon=True)
         self._thread.start()
+
+    def _freeze(self):
+        """Read the sensor's current AWB gains / exposure and pin them."""
+        cfg = self.cfg
+        md = self._picam.capture_metadata()
+        controls = {}
+        # Only freeze what the sensor actually reports. A missing key is
+        # not worth crashing the camera over; the run just stays auto for
+        # that control, and the header records what was locked.
+        if cfg.CAMERA_LOCK_AWB and 'ColourGains' in md:
+            controls['AwbEnable'] = False
+            controls['ColourGains'] = md['ColourGains']
+        if cfg.CAMERA_LOCK_AE and {'ExposureTime', 'AnalogueGain'} <= md.keys():
+            controls['AeEnable'] = False
+            controls['ExposureTime'] = md['ExposureTime']
+            controls['AnalogueGain'] = md['AnalogueGain']
+        if controls:
+            self._picam.set_controls(controls)
+        # Keep the frozen values: two runs are only comparable if they
+        # were taken at the same exposure, so callers can log them.
+        self.locked = {k: v for k, v in controls.items()
+                       if k not in ('AwbEnable', 'AeEnable')}
+
+    def relock(self):
+        """Re-meter the scene and freeze again, without blocking the caller.
+
+        The startup lock pins whatever the camera saw one second after
+        power-up: the floor, a hand, the bench. The pilot calls this on
+        START, when the robot is on the course and pointing down it, so the
+        run's exposure comes from the course. Auto is re-enabled right now;
+        the capture thread pins the new values _LOCK_WARMUP_S later (the PRD
+        countdown is 5 s, so the lock lands before the wheels turn).
+        """
+        cfg = self.cfg
+        auto = {}
+        if cfg.CAMERA_LOCK_AWB:
+            auto['AwbEnable'] = True
+        if cfg.CAMERA_LOCK_AE:
+            auto['AeEnable'] = True
+        if not auto:
+            return
+        self._picam.set_controls(auto)
+        self._relock_at = time.monotonic() + _LOCK_WARMUP_S
 
     def _loop(self):
         while self._run:
@@ -140,6 +167,12 @@ class CsiCamera:
             with self._lock:
                 self._frame = frame
                 self._frame_id += 1
+            if self._relock_at is not None and time.monotonic() >= self._relock_at:
+                self._relock_at = None
+                try:
+                    self._freeze()
+                except Exception:
+                    pass                 # stays auto; the run goes on
 
     def read(self):
         """Returns (frame_id, newest BGR frame). Never blocks."""

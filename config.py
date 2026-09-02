@@ -75,11 +75,26 @@ CAMERA_LOCK_AE = True
 DETECTOR_BACKEND = 'classical'
 DETECT_IGNORE_BOTTOM_FRAC = 0.25   # bottom of frame is floor/line, not signs
 LIGHT_S_MIN = 100   # HSV saturation floor for a lamp; rejects washed-out grey
-LIGHT_V_MIN = 170   # HSV brightness floor. THIS is what separates a LIT lamp from
-                    # an unlit coloured lens. Was 80, which a red/yellow/green lens
-                    # clears in ordinary room light, so a 3-lens traffic-light module
-                    # reported all three colours at once (bench, 2026-09-01). 170
-                    # matches the geometric backend's MIN_VALUE.
+LIGHT_V_MIN = 170   # HSV brightness floor for yellow/green masks, and the floor a
+                    # blob's pixels must clear before the glow test judges them. Was
+                    # 80, which a red/yellow/green lens clears in ordinary room light,
+                    # so a 3-lens traffic-light module reported all three colours at
+                    # once (bench, 2026-09-01). 170 matches the geometric MIN_VALUE.
+SIGN_V_MIN = 80     # brightness floor for the RED mask. A printed stop sign is not
+                    # a light source and must not have to clear a lamp's floor; it
+                    # is told from a lamp by LAMP_GLOW, not by brightness alone.
+# A lit lamp GLOWS: its coloured pixels sit near clipping. Per colour:
+# (mean V, 90th-percentile V, share of pixels at/above the bright level, that
+# bright level). The values are the geometric backend's, which held on all
+# three lamps of the module at 13 in with exposure locked (bench 2026-09-02).
+# Red is the strictest because a lit red lamp is the object most likely to be
+# mistaken for a stop sign, and that mistake ends the run.
+LAMP_GLOW = {
+    'red':    (220, 240, 0.40, 220),
+    'yellow': (200, 230, 0.30, 210),
+    'green':  (185, 220, 0.25, 205),
+}
+LAMP_WINNER_RATIO = 1.2       # one lamp per frame: biggest must beat the next by this
 DETECT_MIN_AREA_FRAC = 0.002  # ignore blobs smaller than 0.2% of the frame
 CONFIRM_FRAMES_N = 3          # TemporalFilter window ...
 CONFIRM_FRAMES_K = 2          # ... act on K of the last N frames

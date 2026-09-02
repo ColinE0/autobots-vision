@@ -18,7 +18,7 @@ from tests.conftest import make_cfg
 class FakePicamera2:
     """Minimal stand-in for picamera2.Picamera2."""
 
-    def __init__(self, frames=1, first_frame_none=False):
+    def __init__(self, frames=1, first_frame_none=False, frame_delay=0.0):
         self.video_config = None
         self.started = False
         self.closed = False
@@ -27,6 +27,7 @@ class FakePicamera2:
                          'ExposureTime': 19999, 'AnalogueGain': 2.5}
         self._frames_left = frames
         self._first_none = first_frame_none
+        self._frame_delay = frame_delay     # per-frame pacing, like a real sensor
         self._stopped = threading.Event()
 
     def create_video_configuration(self, main=None, controls=None):
@@ -44,6 +45,8 @@ class FakePicamera2:
             return None
         if self._frames_left > 0:
             self._frames_left -= 1
+            if self._frame_delay:
+                time.sleep(self._frame_delay)
             return np.zeros((240, 320, 3), np.uint8)
         # out of frames: block like real hardware until stop()
         self._stopped.wait(timeout=5.0)
@@ -146,6 +149,41 @@ def test_csi_ae_lock_skipped_when_metadata_lacks_keys(monkeypatch):
     try:
         assert all('AeEnable' not in c for c in fake.controls_set)
         assert cam.locked == {'ColourGains': (1.8, 1.5)}
+    finally:
+        cam.close()
+
+
+def test_csi_relock_remeters_now_and_freezes_from_the_capture_thread(monkeypatch):
+    # START on the course: auto goes back on immediately, and the capture
+    # thread (not the caller) pins the new values once the warmup passes.
+    monkeypatch.setattr(camera_mod, '_LOCK_WARMUP_S', 0.0)
+    fake = FakePicamera2(frames=400, frame_delay=0.005)    # ~2 s of live frames
+    cam = CsiCamera(make_cfg(CAMERA_LOCK_AWB=True, CAMERA_LOCK_AE=True), _picam2=fake)
+    try:
+        assert cam.locked['ExposureTime'] == 19999          # the boot lock
+        fake.metadata = {'ColourGains': (2.0, 1.2),
+                         'ExposureTime': 30000, 'AnalogueGain': 1.0}
+        cam.relock()
+        assert fake.controls_set[-1] == {'AwbEnable': True, 'AeEnable': True}
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and cam.locked.get('ExposureTime') != 30000:
+            time.sleep(0.005)
+        assert cam.locked == {'ColourGains': (2.0, 1.2),
+                              'ExposureTime': 30000, 'AnalogueGain': 1.0}
+        assert fake.controls_set[-1] == {'AwbEnable': False, 'ColourGains': (2.0, 1.2),
+                                         'AeEnable': False, 'ExposureTime': 30000,
+                                         'AnalogueGain': 1.0}
+    finally:
+        cam.close()
+
+
+def test_csi_relock_is_a_no_op_with_both_locks_off():
+    fake = FakePicamera2()
+    cam = CsiCamera(make_cfg(CAMERA_LOCK_AWB=False, CAMERA_LOCK_AE=False), _picam2=fake)
+    try:
+        cam.relock()
+        assert fake.controls_set == []
+        assert cam.locked == {}
     finally:
         cam.close()
 

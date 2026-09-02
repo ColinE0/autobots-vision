@@ -109,3 +109,9 @@ def test_large_frame_is_downscaled(cfg):
     assert labels(dets) == {'stop_sign'}
     side = 2 * 80 * math.cos(math.radians(22.5))
     assert dets[0].area_frac == pytest.approx(side * side / (640 * 480), rel=0.2)
+
+
+def test_make_detector_dispatches_geometric():
+    from vision.detector import make_detector
+    assert isinstance(make_detector(make_cfg(DETECTOR_BACKEND='geometric')),
+                      GeometricDetector)
