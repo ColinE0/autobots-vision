@@ -4,7 +4,7 @@ from stop_sign_detector import detect_stop_sign
 from traffic_light_detector import detect_traffic_light
 
 
-CAMERA_SOURCE = 2
+CAMERA_SOURCE = 0
 
 
 def boxes_represent_same_object(box1, box2):
