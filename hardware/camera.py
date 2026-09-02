@@ -19,7 +19,7 @@ import cv2
 
 # CSI AWB lock: seconds of auto-white-balance settling before the gains are
 # frozen (only when CAMERA_LOCK_AWB is set).
-_AWB_WARMUP_S = 1.0
+_LOCK_WARMUP_S = 1.0   # let AWB and AE settle before freezing either
 
 
 class UsbCamera:
@@ -93,12 +93,33 @@ class CsiCamera:
             raise RuntimeError(
                 'CSI camera started but the first capture failed. Check the '
                 'flex ribbon seating and `rpicam-hello --list-cameras`.')
-        if cfg.CAMERA_LOCK_AWB:
-            # freeze white balance once it settles, so a big red/green prop
-            # entering frame cannot drag every hue with it mid-run
-            time.sleep(_AWB_WARMUP_S)
-            gains = self._picam.capture_metadata()['ColourGains']
-            self._picam.set_controls({'AwbEnable': False, 'ColourGains': gains})
+        self.locked = {}
+        if cfg.CAMERA_LOCK_AWB or cfg.CAMERA_LOCK_AE:
+            # Freeze white balance and/or exposure once they settle. AWB left
+            # live lets a big red/green prop drag every hue with it mid-run.
+            # AE left live is worse for detection: re-aiming the camera
+            # re-meters the scene, so whether a lamp clears a brightness gate
+            # depends on framing rather than on the lamp. Bench 2026-09-01,
+            # a red lamp only detected after the camera was nudged upward.
+            time.sleep(_LOCK_WARMUP_S)
+            md = self._picam.capture_metadata()
+            controls = {}
+            # Only freeze what the sensor actually reports. A missing key is
+            # not worth crashing the camera over; the run just stays auto for
+            # that control, and the header records what was locked.
+            if cfg.CAMERA_LOCK_AWB and 'ColourGains' in md:
+                controls['AwbEnable'] = False
+                controls['ColourGains'] = md['ColourGains']
+            if cfg.CAMERA_LOCK_AE and {'ExposureTime', 'AnalogueGain'} <= md.keys():
+                controls['AeEnable'] = False
+                controls['ExposureTime'] = md['ExposureTime']
+                controls['AnalogueGain'] = md['AnalogueGain']
+            if controls:
+                self._picam.set_controls(controls)
+            # Keep the frozen values: two runs are only comparable if they
+            # were taken at the same exposure, so callers can log them.
+            self.locked = {k: v for k, v in controls.items()
+                           if k not in ('AwbEnable', 'AeEnable')}
         self._lock = threading.Lock()
         self._frame = frame
         self._frame_id = 1

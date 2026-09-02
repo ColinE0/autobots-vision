@@ -23,7 +23,8 @@ class FakePicamera2:
         self.started = False
         self.closed = False
         self.controls_set = []
-        self.metadata = {'ColourGains': (1.8, 1.5)}
+        self.metadata = {'ColourGains': (1.8, 1.5),
+                         'ExposureTime': 19999, 'AnalogueGain': 2.5}
         self._frames_left = frames
         self._first_none = first_frame_none
         self._stopped = threading.Event()
@@ -115,11 +116,36 @@ def test_csi_thread_publishes_newer_frames():
 
 
 def test_csi_awb_lock_freezes_measured_gains(monkeypatch):
-    monkeypatch.setattr(camera_mod, '_AWB_WARMUP_S', 0.0)
+    monkeypatch.setattr(camera_mod, '_LOCK_WARMUP_S', 0.0)
     fake = FakePicamera2()
-    cam = CsiCamera(make_cfg(CAMERA_LOCK_AWB=True), _picam2=fake)
+    cam = CsiCamera(make_cfg(CAMERA_LOCK_AWB=True, CAMERA_LOCK_AE=False), _picam2=fake)
     try:
         assert {'AwbEnable': False, 'ColourGains': (1.8, 1.5)} in fake.controls_set
+    finally:
+        cam.close()
+
+
+def test_csi_ae_lock_freezes_measured_exposure(monkeypatch):
+    monkeypatch.setattr(camera_mod, '_LOCK_WARMUP_S', 0.0)
+    fake = FakePicamera2()
+    cam = CsiCamera(make_cfg(CAMERA_LOCK_AWB=False, CAMERA_LOCK_AE=True), _picam2=fake)
+    try:
+        assert {'AeEnable': False, 'ExposureTime': 19999,
+                'AnalogueGain': 2.5} in fake.controls_set
+        # exposed so a bench log can record what the run was shot at
+        assert cam.locked == {'ExposureTime': 19999, 'AnalogueGain': 2.5}
+    finally:
+        cam.close()
+
+
+def test_csi_ae_lock_skipped_when_metadata_lacks_keys(monkeypatch):
+    monkeypatch.setattr(camera_mod, '_LOCK_WARMUP_S', 0.0)
+    fake = FakePicamera2()
+    fake.metadata = {'ColourGains': (1.8, 1.5)}      # sensor reports no exposure
+    cam = CsiCamera(make_cfg(CAMERA_LOCK_AWB=True, CAMERA_LOCK_AE=True), _picam2=fake)
+    try:
+        assert all('AeEnable' not in c for c in fake.controls_set)
+        assert cam.locked == {'ColourGains': (1.8, 1.5)}
     finally:
         cam.close()
 

@@ -40,11 +40,16 @@ def main():
     filt = None if raw else TemporalFilter(config)
     view = ('raw' if raw else
             f"confirmed({config.CONFIRM_FRAMES_K}of{config.CONFIRM_FRAMES_N})")
+    # Frozen exposure / gain when the camera locked them. Two runs are only
+    # comparable if they were shot at the same exposure, so it goes in the
+    # header alongside the git rev.
+    locked = getattr(cam, 'locked', {})
+    lock_note = ' '.join(f"{k}={v}" for k, v in sorted(locked.items())) or 'auto'
     log = SessionLog('test_camera',
                      f"camera={config.CAMERA_BACKEND} "
                      f"detector={config.DETECTOR_BACKEND} "
                      f"{config.CAMERA_WIDTH}x{config.CAMERA_HEIGHT}@{config.CAMERA_FPS} "
-                     f"view={view}")
+                     f"view={view} exposure=[{lock_note}]")
     print(f"camera={config.CAMERA_BACKEND}  detector={config.DETECTOR_BACKEND}  "
           f"view={view}. Ctrl+C to quit. Logging to {log.path}\n")
     last_id, n, t0 = -1, 0, time.monotonic()
