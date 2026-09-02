@@ -36,3 +36,45 @@ RANGE_HYST_M = 0.10           # must clear HOLD + this to resume
 RANGE_SLOW_SCALE = 0.40       # forward speed multiplier at the hold line
 RANGE_CLEAR_S = 0.75          # clear this long before resuming
 RANGE_STALE_S = 1.0           # no valid read this long = ignore the ranger
+
+# Camera detection: vision/. Frames are downscaled to this width before any
+# detection work (full-resolution frames don't fit the Pi Zero 2W's budget).
+# Same name and value as the robot's config. Bring-up check: the stop sign's
+# octagon corners must still resolve at this width; raise it only with FPS
+# evidence from the actual Pi.
+DETECT_PROC_WIDTH = 320
+
+# Camera for tools/detect_preview.py, same names and values as the robot:
+#   'csi'  Pi camera (Arducam IMX219) via picamera2 (apt: python3-picamera2)
+#   'usb'  laptop / USB webcam via OpenCV; CAMERA_INDEX applies only here
+#          (index 2 on the laptop the detectors were tuned on)
+# 320x240 capture on purpose: it is the detector's working width, so the
+# CSI ISP scales for free and the downscale becomes a no-op.
+CAMERA_BACKEND = 'csi'
+CAMERA_INDEX = 0             # usb only
+CAMERA_WIDTH = 320
+CAMERA_HEIGHT = 240
+CAMERA_FPS = 30
+CAMERA_USE_MJPG = True       # usb only: MJPG keeps USB bandwidth sane
+# csi only: freeze auto white balance after a 1 s warmup. Leave False unless
+# bring-up shows HSV hits drifting when a big colored prop fills the frame.
+CAMERA_LOCK_AWB = False
+
+# Detector backend, picked by vision.detector.make_detector():
+#   'classical'  HSV masks + contour gates + white-content stop/lamp split
+#                (the robot's detector; 10-20 FPS on the Zero 2 W)
+#   'geometric'  the octagon-fit + glow-profile detectors in this repo
+# Both speak detect(frame) -> [Detection(label, area_frac)]; A/B them on the
+# real camera with tools/test_camera.py and flip this one line.
+DETECTOR_BACKEND = 'classical'
+DETECT_IGNORE_BOTTOM_FRAC = 0.25   # bottom of frame is floor/line, not signs
+LIGHT_S_MIN = 100   # HSV saturation floor for a lamp; rejects washed-out grey
+LIGHT_V_MIN = 170   # HSV brightness floor. THIS is what separates a LIT lamp from
+                    # an unlit coloured lens. Was 80, which a red/yellow/green lens
+                    # clears in ordinary room light, so a 3-lens traffic-light module
+                    # reported all three colours at once (bench, 2026-09-01). 170
+                    # matches the geometric backend's MIN_VALUE.
+DETECT_MIN_AREA_FRAC = 0.002  # ignore blobs smaller than 0.2% of the frame
+CONFIRM_FRAMES_N = 3          # TemporalFilter window ...
+CONFIRM_FRAMES_K = 2          # ... act on K of the last N frames
+STOPSIGN_WHITE_FRAC = 0.06     # white STOP text/border separates sign from lamp

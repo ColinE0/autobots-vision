@@ -147,13 +147,6 @@ def looks_like_red_light(hsv, red_mask):
         )
     )
 
-    print(
-        f"STOP RED TEST | "
-        f"meanV:{mean_value:.1f} | "
-        f"peakV:{peak_value:.1f} | "
-        f"brightRatio:{bright_ratio:.2f}"
-    )
-
     # A region passing all three tests is treated as a red light
     return (
         mean_value >= RED_LIGHT_MEAN_VALUE
@@ -431,23 +424,28 @@ def find_best_octagon(contour, min_side_pixels):
     )
 
 
-def detect_stop_sign(frame):
-    """Detect the strongest valid red octagonal object."""
+def detect_stop_sign(frame, hsv=None):
+    """Detect the strongest valid red octagonal object.
+
+    hsv optionally carries a precomputed blurred HSV frame so one blur and
+    conversion can be shared between both detectors on the Pi Zero 2 W.
+    """
 
     height, width = frame.shape[:2]
     frame_area = width * height
 
-    # Small blur reduces noise while preserving distant corners
-    blurred = cv2.GaussianBlur(
-        frame,
-        (3, 3),
-        0
-    )
+    if hsv is None:
+        # Small blur reduces noise while preserving distant corners
+        blurred = cv2.GaussianBlur(
+            frame,
+            (3, 3),
+            0
+        )
 
-    hsv = cv2.cvtColor(
-        blurred,
-        cv2.COLOR_BGR2HSV
-    )
+        hsv = cv2.cvtColor(
+            blurred,
+            cv2.COLOR_BGR2HSV
+        )
 
     # Find all red pixels
     red_mask = get_red_mask(hsv)
@@ -510,11 +508,6 @@ def detect_stop_sign(frame):
             candidate_hsv,
             candidate_red_mask
         ):
-            print(
-                "STOP REJECTED: "
-                "looks like glowing red light"
-            )
-
             continue
 
         # Distant signs use slightly more forgiving geometry thresholds
