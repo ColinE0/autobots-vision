@@ -22,11 +22,13 @@ Pi.
 RANGE_ENABLED = False
 RANGE_I2C_BUS = 1
 RANGE_I2C_ADDR = 0x29
-# VL53L0X accuracy mode (timing budget must fit the 50 ms poll period):
-# 1 GOOD 33 ms / 2 BETTER 66 ms / 3 BEST 200 ms / 4 LONG_RANGE 33 ms /
-# 5 HIGH_SPEED 20 ms. LONG_RANGE: full ~2 m reach at a budget that fits.
-# Confirm the constants against the installed binding at bring-up.
-RANGE_MODE = 4
+# VL53L0X accuracy mode, FALLBACK ONLY: ranger.py resolves LONG_RANGE by
+# name from the installed binding. The binding's constants are 0-BASED
+# (0 GOOD 33 ms / 1 BETTER 66 / 2 BEST 200 / 3 LONG_RANGE 33 /
+# 4 HIGH_SPEED 20); the 1-based table recorded here before was wrong,
+# caught at first bench contact 2026-09-04 (RANGE_MODE = 4 would have
+# meant HIGH_SPEED). Used only if the binding exposes no LONG_RANGE name.
+RANGE_MODE = 3
 RANGE_POLL_HZ = 20
 RANGE_EMA_ALPHA = 0.5         # light smoothing; the sensor is already mm-quiet
 RANGE_MAX_M = 2.0             # reads beyond this count as "nothing ahead"

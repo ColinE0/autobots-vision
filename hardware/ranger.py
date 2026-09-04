@@ -4,13 +4,26 @@ class Ranger:
         if _sensor is not None:                 # tests inject a fake here
             self._s = _sensor
         else:
+            # VL53L0X_rasp_python has two API generations in the wild. The
+            # original (what a fresh clone of master gives you, confirmed at
+            # first bench contact 2026-09-04) has no open(), takes address=,
+            # and hardwires bus 1; the reworked fork adds open()/i2c_bus=.
             import VL53L0X                       # VL53L0X_rasp_python binding
-            self._s = VL53L0X.VL53L0X(i2c_bus=cfg.RANGE_I2C_BUS,
-                                      i2c_address=cfg.RANGE_I2C_ADDR)
-            self._s.open()
-            # Accuracy mode sets the timing budget; it must fit inside the
-            # RANGE_POLL_HZ period (50 ms at 20 Hz). See config.RANGE_MODE.
-            self._s.start_ranging(cfg.RANGE_MODE)
+            if hasattr(VL53L0X.VL53L0X, 'open'):
+                self._s = VL53L0X.VL53L0X(i2c_bus=cfg.RANGE_I2C_BUS,
+                                          i2c_address=cfg.RANGE_I2C_ADDR)
+                self._s.open()
+            else:
+                self._s = VL53L0X.VL53L0X(address=cfg.RANGE_I2C_ADDR)
+            # LONG_RANGE: full ~2 m reach at a 33 ms budget, inside the
+            # RANGE_POLL_HZ period (50 ms at 20 Hz). Resolve it by NAME from
+            # the installed binding (the generations number their constants
+            # differently); cfg.RANGE_MODE is only the nameless fallback.
+            mode = getattr(VL53L0X, 'VL53L0X_LONG_RANGE_MODE', None)
+            if mode is None:
+                mode = getattr(getattr(VL53L0X, 'Vl53l0xAccuracyMode', None),
+                               'LONG_RANGE', cfg.RANGE_MODE)
+            self._s.start_ranging(mode)
         self._alpha = cfg.RANGE_EMA_ALPHA
         self._period = 1.0 / cfg.RANGE_POLL_HZ
         self._next = 0.0
