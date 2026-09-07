@@ -58,11 +58,16 @@ def main():
     # header alongside the git rev.
     locked = getattr(cam, 'locked', {})
     lock_note = ' '.join(f"{k}={v}" for k, v in sorted(locked.items())) or 'auto'
+    # How AE metered before it was locked (csi only); the lit-lamp fix of
+    # 2026-09-05 lives here, so a run must say which mode it was shot under.
+    meter_note = (f"{config.CAMERA_AE_CONSTRAINT} ev={config.CAMERA_EV}"
+                  if config.CAMERA_BACKEND == 'csi' else 'n/a')
     log = SessionLog('test_camera',
                      f"camera={config.CAMERA_BACKEND} "
                      f"detector={config.DETECTOR_BACKEND} "
                      f"{config.CAMERA_WIDTH}x{config.CAMERA_HEIGHT}@{config.CAMERA_FPS} "
-                     f"view={view} exposure=[{lock_note}] save={save}")
+                     f"view={view} meter=[{meter_note}] exposure=[{lock_note}] "
+                     f"save={save}")
     print(f"camera={config.CAMERA_BACKEND}  detector={config.DETECTOR_BACKEND}  "
           f"view={view}. Ctrl+C to quit. Logging to {log.path}"
           + (f", frames to {frames_dir}" if save else '') + "\n")

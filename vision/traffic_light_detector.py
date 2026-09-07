@@ -65,7 +65,7 @@ RED1_UPPER = np.array([12, 255, 255])
 RED2_LOWER = np.array([168, 100, 100])
 RED2_UPPER = np.array([180, 255, 255])
 
-YELLOW_LOWER = np.array([15, 90, 100])
+YELLOW_LOWER = np.array([13, 90, 100])   # adjacent to RED1_UPPER (12): no unclaimed hue
 YELLOW_UPPER = np.array([40, 255, 255])
 
 GREEN_LOWER = np.array([40, 80, 80])
@@ -76,6 +76,28 @@ GREEN_UPPER = np.array([95, 255, 255])
 OPEN_KERNEL = np.ones((3, 3), np.uint8)
 CLOSE_KERNEL = np.ones((5, 5), np.uint8)
 YELLOW_DILATE_KERNEL = np.ones((5, 5), np.uint8)
+
+def configure(cfg):
+    """Take the tunables this module shares with the classical backend from the
+    robot config, so one edit tunes both at the A/B. Only names the config
+    already declares equal are mapped; everything else keeps its default here.
+    Called by GeometricDetector.__init__."""
+    global MIN_VALUE, MIN_AREA_RATIO, MAX_AREA_RATIO
+    global RED_MIN_MEAN_VALUE, RED_MIN_PEAK_VALUE, RED_MIN_BRIGHT_RATIO, RED_BRIGHT_PIXEL_VALUE
+    global YELLOW_MIN_MEAN_VALUE, YELLOW_MIN_PEAK_VALUE, YELLOW_MIN_BRIGHT_RATIO, YELLOW_BRIGHT_PIXEL_VALUE
+    global GREEN_MIN_MEAN_VALUE, GREEN_MIN_PEAK_VALUE, GREEN_MIN_BRIGHT_RATIO, GREEN_BRIGHT_PIXEL_VALUE
+    MIN_VALUE = getattr(cfg, 'LIGHT_V_MIN', MIN_VALUE)
+    MIN_AREA_RATIO = getattr(cfg, 'DETECT_MIN_AREA_FRAC', MIN_AREA_RATIO)
+    MAX_AREA_RATIO = getattr(cfg, 'GEO_LIGHT_MAX_AREA_FRAC', MAX_AREA_RATIO)
+    glow = getattr(cfg, 'LAMP_GLOW', None)
+    if glow:
+        (RED_MIN_MEAN_VALUE, RED_MIN_PEAK_VALUE,
+         RED_MIN_BRIGHT_RATIO, RED_BRIGHT_PIXEL_VALUE) = glow['red']
+        (YELLOW_MIN_MEAN_VALUE, YELLOW_MIN_PEAK_VALUE,
+         YELLOW_MIN_BRIGHT_RATIO, YELLOW_BRIGHT_PIXEL_VALUE) = glow['yellow']
+        (GREEN_MIN_MEAN_VALUE, GREEN_MIN_PEAK_VALUE,
+         GREEN_MIN_BRIGHT_RATIO, GREEN_BRIGHT_PIXEL_VALUE) = glow['green']
+
 
 # Helper functions for ROI and color masks
 

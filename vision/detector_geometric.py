@@ -30,7 +30,7 @@ from collections import namedtuple
 import cv2
 
 from vision.stop_sign_detector import detect_stop_sign
-from vision.traffic_light_detector import detect_traffic_light
+from vision.traffic_light_detector import detect_traffic_light, configure as configure_lights
 
 # The whole pipeline is small-image work where OpenCV's thread fan-out costs
 # more than it saves, and the 50 Hz control / 100 Hz IR threads need cores.
@@ -101,6 +101,7 @@ class GeometricDetector:
     # classical Detector.
     def __init__(self, cfg):
         self.cfg = cfg
+        configure_lights(cfg)      # shared tunables by name; see config.py
 
     def detect(self, frame_bgr):
         cfg = self.cfg

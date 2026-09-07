@@ -67,6 +67,19 @@ CAMERA_USE_MJPG = True       # usb only: MJPG keeps USB bandwidth sane
 # against a moving exposure.
 CAMERA_LOCK_AWB = True
 CAMERA_LOCK_AE = True
+# csi only: how auto-exposure METERS before the lock, and again at the START
+# relock. 'highlight' picks the imx219.json rpi.agc constraint set that adds
+# an upper bound holding the brightest 2% of pixels at 0.8 of full scale, so
+# a lit lamp in frame pulls the exposure down instead of clipping to white.
+# A clipped lamp loses its colour: the detector's saturation floor deletes
+# the white core and what is left read as STOP text (review 2026-09-05; the
+# clipped-core test below is the detector-side guard, this is the cause).
+# 'normal' is libcamera's default metering; 'shadows' biases the other way.
+CAMERA_AE_CONSTRAINT = 'highlight'
+# Exposure offset in stops (log2) on the metered target, honoured only while
+# AE runs. 0.0 trusts the constraint. Floored at -1.0 in hardware/camera.py:
+# a V 180 printed sign one stop under reads about V 90, still over SIGN_V_MIN.
+CAMERA_EV = 0.0
 
 # Detector backend, picked by vision.detector.make_detector():
 #   'classical'  HSV masks + contour gates + white-content stop/lamp split
@@ -100,4 +113,47 @@ LAMP_WINNER_RATIO = 1.2       # one lamp per frame: biggest must beat the next b
 DETECT_MIN_AREA_FRAC = 0.002  # ignore blobs smaller than 0.2% of the frame
 CONFIRM_FRAMES_N = 3          # TemporalFilter window ...
 CONFIRM_FRAMES_K = 2          # ... act on K of the last N frames
-STOPSIGN_WHITE_FRAC = 0.06     # white STOP text/border separates sign from lamp
+STOPSIGN_WHITE_FRAC = 0.06     # white STOP text/border separates sign from lamp:
+                               # this share of the red blob's INTERIOR must be white
+# What counts as white inside a red blob. A printed sign is a reflector, so a
+# darker exposure dims its letters and its red together; the floor therefore
+# follows the blob: V >= STOPSIGN_WHITE_REL x the median V of its red pixels,
+# never under STOPSIGN_WHITE_V_MIN (a floor for near-black frames) and never
+# over STOPSIGN_WHITE_V_CAP (clipped letters still count). A fixed V 170
+# floor lost a rendered sign at 0.7x the tuning exposure and this rule held
+# to 0.5x (review 2026-09-07); 0.7x is where the highlight AE constraint puts
+# a sign once a lit lamp is in frame. Real sign white-to-red V ratio assumed
+# 1.15 to 1.2; read it off a saved test_camera frame before trusting 1.1.
+STOPSIGN_WHITE_REL = 1.1
+STOPSIGN_WHITE_V_MIN = 100
+STOPSIGN_WHITE_V_CAP = 245
+# Flatness veto for the glow test, OFF (0) until read on a real lamp. A lit
+# lamp falls off from centre to rim, a printed sign is flat, so a blob whose
+# V spread (p90 minus p10 of the pixels the glow test judges) is under this
+# is not a lamp however bright: flat red at V 240 clears every glow floor and
+# reads as red_light, a hold that never clears. Rendered frames 2026-09-07:
+# lamps 61 to 75, flat signs 0 to 4, so 30 is the value to try. Risk on the
+# other side: the highlight constraint leaves a real lamp less clipped and
+# flatter, and a misfire misses a red light. Read a real lamp first.
+LAMP_MIN_V_SPREAD = 0
+# A blown-out lamp (close, or metered under a long locked exposure) clips to
+# white almost to its rim. The colour mask deletes that core (S near 0), and
+# the ring plus halo that survive fail LAMP_GLOW on mean V, so the lamp used
+# to fall through to the white test and read as a stop sign. The core the
+# mask threw away is judged by SHAPE instead: the largest white component in
+# the blob's bounding box must cover this share of the box, be round
+# (width / height inside the range), filled (area over its own box) and
+# centred (centroid within this fraction of the box from the box centre).
+# STOP text is a 3.5:1 band and a sign's white border is hollow, so a printed
+# sign never passes. Review 2026-09-05: held on 15 synthetic cases, no sign
+# regression; real-frame check owed at the matched re-run.
+LAMP_CORE_MIN_FRAC = 0.10
+LAMP_CORE_ASPECT = (0.6, 1.6)
+LAMP_CORE_MIN_EXTENT = 0.55
+LAMP_CORE_CENTER_TOL = 0.25
+# Geometric backend (vision/detector_geometric.py): the tunables it shares
+# with the classical path it takes by name (LIGHT_V_MIN, DETECT_MIN_AREA_FRAC,
+# LAMP_GLOW). This one is its own: the largest blob its traffic-light path
+# considers. It shipped at 0.05, which dropped every close lamp (PR #1 item
+# 1, 2026-09-05); 0.35 keeps a lamp filling a third of the frame.
+GEO_LIGHT_MAX_AREA_FRAC = 0.35

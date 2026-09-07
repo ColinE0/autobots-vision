@@ -21,6 +21,41 @@ import cv2
 # when CAMERA_LOCK_AWB / CAMERA_LOCK_AE is set), at startup and on relock().
 _LOCK_WARMUP_S = 1.0
 
+# libcamera AeConstraintMode, by name. The ints are the enum values from
+# libcamera's control_ids (Normal 0, Highlight 1, Shadows 2); the names are
+# the rpi.agc constraint_modes blocks in the IMX219 tuning file.
+_AE_CONSTRAINT = {'normal': 0, 'highlight': 1, 'shadows': 2}
+# ExposureValue floor, in stops. A V 180 printed sign one stop under reads
+# about V 90, still over SIGN_V_MIN = 80; two stops under it would not.
+_EV_FLOOR = -1.0
+# A lock at this share of the frame period means AE ran out of shutter (a
+# dark scene). The detector's brightness floors were tuned under room light
+# at 13 in and will not hold there, so the lock says so on the console and
+# exposes exposure_at_ceiling for the pilot's log line.
+_CEILING_FRAC = 0.95
+
+
+def _ae_controls(cfg):
+    """Metering controls for the CSI stream configuration.
+
+    Set in the configuration, not via set_controls, so that BOTH the boot
+    lock and the START relock meter under them. AeConstraintMode picks a
+    constraint set from the sensor tuning: 'highlight' adds an upper bound
+    that holds the brightest 2% of the frame at 0.8 of full scale, so a lit
+    lamp in frame pulls the exposure DOWN instead of clipping to white and
+    losing its colour (review 2026-09-05: a clipped lamp is what the
+    detector's saturation floor deletes, and its white core then read as
+    STOP text). ExposureValue is a log2 offset on the metered target,
+    honoured only while AE runs, floored at _EV_FLOOR.
+    """
+    name = cfg.CAMERA_AE_CONSTRAINT
+    if name not in _AE_CONSTRAINT:
+        raise ValueError(
+            f"CAMERA_AE_CONSTRAINT={name!r} is not a constraint mode; use one of "
+            f"{sorted(_AE_CONSTRAINT)}")
+    return {'AeConstraintMode': _AE_CONSTRAINT[name],
+            'ExposureValue': max(_EV_FLOOR, float(cfg.CAMERA_EV))}
+
 
 class UsbCamera:
     # V4L2/OpenCV capture (the pre-2026-07-20 robot camera, kept as the spare).
@@ -82,10 +117,12 @@ class CsiCamera:
         # it to BGR888; that one comes out RGB and every hue in the detector
         # shifts. Bring-up check: a real stop sign must label stop_sign or
         # red_light in tools/test_camera.py, never blue/nothing.
+        controls = {'FrameRate': float(cfg.CAMERA_FPS)}
+        controls.update(_ae_controls(cfg))
         stream = self._picam.create_video_configuration(
             main={'size': (cfg.CAMERA_WIDTH, cfg.CAMERA_HEIGHT),
                   'format': 'RGB888'},
-            controls={'FrameRate': float(cfg.CAMERA_FPS)})
+            controls=controls)
         self._picam.configure(stream)
         self._picam.start()
         frame = self._picam.capture_array('main')
@@ -94,6 +131,7 @@ class CsiCamera:
                 'CSI camera started but the first capture failed. Check the '
                 'flex ribbon seating and `rpicam-hello --list-cameras`.')
         self.locked = {}
+        self.exposure_at_ceiling = False
         self._relock_at = None
         if cfg.CAMERA_LOCK_AWB or cfg.CAMERA_LOCK_AE:
             # Freeze white balance and/or exposure once they settle. AWB left
@@ -126,6 +164,12 @@ class CsiCamera:
             controls['AeEnable'] = False
             controls['ExposureTime'] = md['ExposureTime']
             controls['AnalogueGain'] = md['AnalogueGain']
+            ceiling_us = 1e6 / float(cfg.CAMERA_FPS)
+            self.exposure_at_ceiling = md['ExposureTime'] >= _CEILING_FRAC * ceiling_us
+            if self.exposure_at_ceiling:
+                print(f"[camera] WARNING: exposure locked at {md['ExposureTime']} us, the "
+                      f"{cfg.CAMERA_FPS} fps frame ceiling: dark scene, the detector's "
+                      f"brightness floors were tuned under room light.")
         if controls:
             self._picam.set_controls(controls)
         # Keep the frozen values: two runs are only comparable if they

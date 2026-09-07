@@ -210,32 +210,20 @@ def score_octagon(approx, min_side_pixels):
         return 0.0, {}
 
     # Convert OpenCV's point format into simple (x, y) coordinates
-    points = [
-        tuple(point[0])
-        for point in approx
-    ]
-
-    angles = []
-
-    # Calculate the interior angle at each of the 8 corners
-    for i in range(8):
-        previous_point = points[(i - 1) % 8]
-        current_point = points[i]
-        next_point = points[(i + 1) % 8]
-
-        angle = get_angle(
-            previous_point,
-            current_point,
-            next_point
-        )
-
-        angles.append(angle)
+    # All eight corners in one numpy pass (the same math as get_angle, kept
+    # above for reference). Eight small-array calls per polygon, times the
+    # epsilon sweep, was 70% of the geometric frame on 2026-09-07.
+    pts = approx.reshape(-1, 2).astype(np.float64)
+    v1 = np.roll(pts, 1, axis=0) - pts        # corner -> previous corner
+    v2 = np.roll(pts, -1, axis=0) - pts       # corner -> next corner
+    n1 = np.linalg.norm(v1, axis=1)
+    n2 = np.linalg.norm(v2, axis=1)
+    cosine = np.einsum('ij,ij->i', v1, v2) / np.maximum(n1 * n2, 1e-12)
+    angles = np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0)))
+    angles[(n1 <= 0) | (n2 <= 0)] = 0.0
 
     # Compare every measured angle to the ideal 135-degree angle
-    angle_errors = [
-        abs(angle - IDEAL_OCTAGON_ANGLE)
-        for angle in angles
-    ]
+    angle_errors = np.abs(angles - IDEAL_OCTAGON_ANGLE)
 
     mean_angle_error = float(
         np.mean(angle_errors)
@@ -274,30 +262,11 @@ def score_octagon(approx, min_side_pixels):
         - max_angle_error / 50.0
     )
 
-    side_lengths = []
+    # Side lengths come from the same pass: corner i to corner i+1 is v2
+    side_lengths = n2
 
-    # Calculate the distance between each pair of neighboring corners
-    for i in range(8):
-        p1 = np.array(
-            points[i],
-            dtype=np.float32
-        )
-
-        p2 = np.array(
-            points[(i + 1) % 8],
-            dtype=np.float32
-        )
-
-        length = float(
-            np.linalg.norm(
-                p2 - p1
-            )
-        )
-
-        side_lengths.append(length)
-
-    min_side = min(side_lengths)
-    max_side = max(side_lengths)
+    min_side = float(side_lengths.min())
+    max_side = float(side_lengths.max())
 
     # Reject polygons whose sides are too small to analyze reliably
     if min_side < min_side_pixels:
@@ -375,6 +344,7 @@ def find_best_octagon(contour, min_side_pixels):
     best_approx = None
     best_score = 0.0
     best_details = {}
+    seen = set()    # neighbouring epsilons often yield the same 8-gon: score it once
 
     # Different epsilon values control how strongly the contour is simplified
     epsilon_ratios = [
@@ -405,6 +375,11 @@ def find_best_octagon(contour, min_side_pixels):
         # 8 corner points means an 8-sided polygon
         if len(approx) != 8:
             continue
+
+        key = approx.tobytes()
+        if key in seen:
+            continue
+        seen.add(key)
 
         # Check how closely those 8 corners resemble a real octagon
         score, details = score_octagon(

@@ -80,7 +80,8 @@ def test_make_camera_rejects_unknown_backend():
 
 
 def test_csi_configures_stream_from_config():
-    cfg = make_cfg(CAMERA_WIDTH=320, CAMERA_HEIGHT=240, CAMERA_FPS=30)
+    cfg = make_cfg(CAMERA_WIDTH=320, CAMERA_HEIGHT=240, CAMERA_FPS=30,
+                   CAMERA_AE_CONSTRAINT='highlight', CAMERA_EV=0.0)
     fake = FakePicamera2()
     cam = CsiCamera(cfg, _picam2=fake)
     try:
@@ -88,10 +89,46 @@ def test_csi_configures_stream_from_config():
         # RGB888 is B,G,R in memory (libcamera names run backwards), which is
         # OpenCV's order; the detector's HSV math depends on this exact string.
         assert fake.video_config['main'] == {'size': (320, 240), 'format': 'RGB888'}
-        assert fake.video_config['controls'] == {'FrameRate': 30.0}
+        # Metering controls ride in the stream configuration so the boot
+        # lock and the START relock both meter under them (review 2026-09-05).
+        assert fake.video_config['controls'] == {'FrameRate': 30.0,
+                                                 'AeConstraintMode': 1,
+                                                 'ExposureValue': 0.0}
     finally:
         cam.close()
     assert fake.closed
+
+
+@pytest.mark.parametrize('name,value', [('normal', 0), ('highlight', 1), ('shadows', 2)])
+def test_csi_ae_constraint_names_map_to_libcamera_enum(name, value):
+    fake = FakePicamera2()
+    cam = CsiCamera(make_cfg(CAMERA_AE_CONSTRAINT=name), _picam2=fake)
+    try:
+        assert fake.video_config['controls']['AeConstraintMode'] == value
+    finally:
+        cam.close()
+
+
+def test_csi_rejects_unknown_ae_constraint():
+    with pytest.raises(ValueError):
+        CsiCamera(make_cfg(CAMERA_AE_CONSTRAINT='bright'), _picam2=FakePicamera2())
+
+
+def test_csi_exposure_value_is_floored_at_minus_one_stop():
+    # Below -1 stop a V 180 printed sign drops under SIGN_V_MIN; the floor
+    # keeps a typo in config from making every sign invisible.
+    fake = FakePicamera2()
+    cam = CsiCamera(make_cfg(CAMERA_EV=-2.5), _picam2=fake)
+    try:
+        assert fake.video_config['controls']['ExposureValue'] == -1.0
+    finally:
+        cam.close()
+    fake = FakePicamera2()
+    cam = CsiCamera(make_cfg(CAMERA_EV=-0.5), _picam2=fake)
+    try:
+        assert fake.video_config['controls']['ExposureValue'] == -0.5
+    finally:
+        cam.close()
 
 
 def test_csi_read_returns_first_frame_and_close_joins():
@@ -137,6 +174,32 @@ def test_csi_ae_lock_freezes_measured_exposure(monkeypatch):
                 'AnalogueGain': 2.5} in fake.controls_set
         # exposed so a bench log can record what the run was shot at
         assert cam.locked == {'ExposureTime': 19999, 'AnalogueGain': 2.5}
+    finally:
+        cam.close()
+
+
+def test_csi_ae_lock_at_the_frame_ceiling_warns(monkeypatch, capsys):
+    # AE out of shutter (a dark room): the detector floors were tuned under
+    # room light, so the lock says so and exposes a flag for the pilot log.
+    monkeypatch.setattr(camera_mod, '_LOCK_WARMUP_S', 0.0)
+    fake = FakePicamera2()
+    fake.metadata['ExposureTime'] = 33000        # of a 33333 us frame at 30 fps
+    cam = CsiCamera(make_cfg(CAMERA_LOCK_AWB=False, CAMERA_LOCK_AE=True,
+                             CAMERA_FPS=30), _picam2=fake)
+    try:
+        assert cam.exposure_at_ceiling
+        assert 'frame ceiling' in capsys.readouterr().out
+    finally:
+        cam.close()
+
+
+def test_csi_ae_lock_under_the_ceiling_is_quiet(monkeypatch, capsys):
+    monkeypatch.setattr(camera_mod, '_LOCK_WARMUP_S', 0.0)
+    cam = CsiCamera(make_cfg(CAMERA_LOCK_AWB=False, CAMERA_LOCK_AE=True,
+                             CAMERA_FPS=30), _picam2=FakePicamera2())
+    try:
+        assert not cam.exposure_at_ceiling
+        assert 'frame ceiling' not in capsys.readouterr().out
     finally:
         cam.close()
 

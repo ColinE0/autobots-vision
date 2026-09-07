@@ -111,6 +111,27 @@ def test_large_frame_is_downscaled(cfg):
     assert dets[0].area_frac == pytest.approx(side * side / (640 * 480), rel=0.2)
 
 
+def test_lamp_size_cap_comes_from_config(cfg):
+    # A close lamp fills a fifth of the frame. The module shipped with a 5%
+    # cap that dropped every close lamp (PR #1 item 1); the cap now comes
+    # from GEO_LIGHT_MAX_AREA_FRAC.
+    f = frame()
+    cv2.circle(f, (160, 90), 70, GLOW_RED, -1)
+    assert labels(GeometricDetector(cfg).detect(f)) == {'red_light'}
+    cfg.GEO_LIGHT_MAX_AREA_FRAC = 0.05
+    assert GeometricDetector(cfg).detect(f) == []
+    GeometricDetector(make_cfg())          # module state back to the shipped config
+
+
+def test_configure_maps_the_shared_names(cfg):
+    import vision.traffic_light_detector as tl
+    cfg.LIGHT_V_MIN = 123
+    GeometricDetector(cfg)
+    assert tl.MIN_VALUE == 123
+    GeometricDetector(make_cfg())
+    assert tl.MIN_VALUE == make_cfg().LIGHT_V_MIN
+
+
 def test_make_detector_dispatches_geometric():
     from vision.detector import make_detector
     assert isinstance(make_detector(make_cfg(DETECTOR_BACKEND='geometric')),
