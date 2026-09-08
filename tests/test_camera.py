@@ -30,8 +30,8 @@ class FakePicamera2:
         self._frame_delay = frame_delay     # per-frame pacing, like a real sensor
         self._stopped = threading.Event()
 
-    def create_video_configuration(self, main=None, controls=None):
-        return {'main': main, 'controls': controls}
+    def create_video_configuration(self, main=None, controls=None, raw=None):
+        return {'main': main, 'controls': controls, 'raw': raw}
 
     def configure(self, cfg):
         self.video_config = cfg
@@ -97,6 +97,30 @@ def test_csi_configures_stream_from_config():
     finally:
         cam.close()
     assert fake.closed
+
+
+def test_csi_requests_the_full_frame_sensor_mode_by_default():
+    # Without an explicit raw stream picamera2 picks the IMX219's 640x480
+    # mode for a 320x240 main, a 1280x960 centre crop (flight Zero,
+    # 2026-09-08). The lane model and the sign geometry both assume the
+    # lens's real field of view, so the mode is named, not inferred.
+    fake = FakePicamera2()
+    cam = CsiCamera(make_cfg(), _picam2=fake)
+    try:
+        assert fake.video_config['raw'] == {'size': (1640, 1232)}
+        assert cam.sensor_size == (1640, 1232)
+    finally:
+        cam.close()
+
+
+def test_csi_sensor_size_none_leaves_the_mode_to_picamera2():
+    fake = FakePicamera2()
+    cam = CsiCamera(make_cfg(CAMERA_SENSOR_SIZE=None), _picam2=fake)
+    try:
+        assert fake.video_config['raw'] is None
+        assert cam.sensor_size is None
+    finally:
+        cam.close()
 
 
 @pytest.mark.parametrize('name,value', [('normal', 0), ('highlight', 1), ('shadows', 2)])

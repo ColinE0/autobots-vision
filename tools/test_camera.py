@@ -62,10 +62,17 @@ def main():
     # 2026-09-05 lives here, so a run must say which mode it was shot under.
     meter_note = (f"{config.CAMERA_AE_CONSTRAINT} ev={config.CAMERA_EV}"
                   if config.CAMERA_BACKEND == 'csi' else 'n/a')
+    # Sensor mode (csi only). Runs before 2026-09-08 logged only the main
+    # size and were shot on the 640x480 centre crop; a run on the full frame
+    # is not comparable to them, so the header says which.
+    sensor = getattr(cam, 'sensor_size', None)
+    sensor_note = (('auto' if sensor is None else f"{sensor[0]}x{sensor[1]}")
+                   if config.CAMERA_BACKEND == 'csi' else 'n/a')
     log = SessionLog('test_camera',
                      f"camera={config.CAMERA_BACKEND} "
                      f"detector={config.DETECTOR_BACKEND} "
                      f"{config.CAMERA_WIDTH}x{config.CAMERA_HEIGHT}@{config.CAMERA_FPS} "
+                     f"sensor={sensor_note} "
                      f"view={view} meter=[{meter_note}] exposure=[{lock_note}] "
                      f"save={save}")
     print(f"camera={config.CAMERA_BACKEND}  detector={config.DETECTOR_BACKEND}  "

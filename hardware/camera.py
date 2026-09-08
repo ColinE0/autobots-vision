@@ -4,7 +4,9 @@ Camera capture. Two backends behind make_camera(), picked by CAMERA_BACKEND:
   "csi"  CsiCamera: Arducam 8MP IMX219 on the CSI ribbon via picamera2.
          The ISP hands over frames already at CAMERA_WIDTH x CAMERA_HEIGHT
          in BGR order, so there is no MJPG decode and no USB stack in the
-         path. The robot camera as of 2026-07-20.
+         path. The SENSOR mode is named by CAMERA_SENSOR_SIZE (full frame),
+         because left to itself picamera2 picks a centre crop for a small
+         main stream. The robot camera as of 2026-07-20.
   "usb"  UsbCamera: DFRobot FIT0701 or any V4L2 webcam (the bench spare).
 
 Both free-run a capture thread that keeps only the newest frame, so the
@@ -119,10 +121,21 @@ class CsiCamera:
         # red_light in tools/test_camera.py, never blue/nothing.
         controls = {'FrameRate': float(cfg.CAMERA_FPS)}
         controls.update(_ae_controls(cfg))
-        stream = self._picam.create_video_configuration(
-            main={'size': (cfg.CAMERA_WIDTH, cfg.CAMERA_HEIGHT),
-                  'format': 'RGB888'},
-            controls=controls)
+        stream_kw = {'main': {'size': (cfg.CAMERA_WIDTH, cfg.CAMERA_HEIGHT),
+                              'format': 'RGB888'},
+                     'controls': controls}
+        # Sensor mode. Left to itself picamera2 picks the smallest mode that
+        # covers the main stream, which for a 320x240 main on the IMX219 is
+        # 640x480: a (1000,752)/1280x960 CENTRE CROP of the 3280x2464 sensor,
+        # about 2.5x tighter than the lens (confirmed on the flight Zero,
+        # 2026-09-08). CAMERA_SENSOR_SIZE names the mode; the ISP still scales
+        # it to CAMERA_WIDTH x CAMERA_HEIGHT for free. None restores the old
+        # picamera2 choice. getattr: the two repos' configs can skew by a pull.
+        sensor = getattr(cfg, 'CAMERA_SENSOR_SIZE', (1640, 1232))
+        if sensor is not None:
+            stream_kw['raw'] = {'size': tuple(sensor)}
+        self.sensor_size = None if sensor is None else tuple(sensor)
+        stream = self._picam.create_video_configuration(**stream_kw)
         self._picam.configure(stream)
         self._picam.start()
         frame = self._picam.capture_array('main')

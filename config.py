@@ -58,6 +58,17 @@ CAMERA_WIDTH = 320
 CAMERA_HEIGHT = 240
 CAMERA_FPS = 30
 CAMERA_USE_MJPG = True       # usb only: MJPG keeps USB bandwidth sane
+# csi only: the SENSOR mode, distinct from the main stream above. Unset,
+# picamera2 picks the smallest mode that covers CAMERA_WIDTH x CAMERA_HEIGHT,
+# which on the IMX219 is 640x480, a (1000,752)/1280x960 CENTRE CROP: about
+# 2.5x tighter than the lens, so a level camera at bumper height cannot hold
+# a 15 cm sign or the 14 cm lane in frame one block out. Confirmed on the
+# flight Zero 2026-09-08 (rpicam-hello --list-cameras; picamera2 raw=640x480).
+# 1640x1232 is the 2x2-binned FULL frame ((0,0)/3280x2464, 81 fps ceiling);
+# the ISP still scales it to the main size for free. Area-fraction thresholds
+# (DETECT_MIN_AREA_FRAC and friends) were tuned on the crop: a prop reads
+# about 6.6x smaller here. None = the old picamera2 choice.
+CAMERA_SENSOR_SIZE = (1640, 1232)
 # csi only: freeze auto white balance and auto exposure after a 1 s warmup.
 # Both default ON. AWB live lets a big colored prop drag every hue with it.
 # AE live is worse: re-aiming the camera re-meters the scene, so whether a
