@@ -21,21 +21,41 @@ Classical pipeline per frame:
      stop sign is not a light source and must not have to clear a lamp's floor.
   4. contours; keep blobs >= DETECT_MIN_AREA_FRAC of the frame, roughly
      compact (extent/aspect gates reject streaks), largest blob per label
-  5. GLOW test on every surviving blob: a lit lamp's colored pixels sit near
-     clipping, so their mean V, 90th-percentile V and the share above a
-     bright level all clear per-color floors (LAMP_GLOW). This is the test
-     that separates a lit lamp from an unlit colored lens, a red poster, or
-     a printed sign, and it runs BEFORE the white test below: a lit LED
-     clips to white at its core, and that core used to read as STOP text.
-     Bench 2026-09-02, exposure locked: six seconds of a CONFIRMED stop_sign
-     at 14% on a lit red lamp, which on the robot ends the run at a red light.
+  5. LETTERING test on every surviving RED blob (the stop-sign test). The
+     white inside the blob must cover STOPSIGN_WHITE_FRAC of it AND be laid
+     out like text: at least three separate marks of similar height in one
+     row, spanning a third of the blob's width, none of them a filled dot
+     (extent under STOPSIGN_LETTER_MAX_EXTENT). A layout rule, not OCR. It
+     runs ahead of the glow test because a printed sign lit up to the glow
+     floors (V 240 flat) cleared every one of them and read as red_light, a
+     hold that never clears; and it can safely run first because the white
+     a lit LED shows is a clipped core, a reflection band, or a row of
+     clipped emitters, none of which is a text row (review 2026-09-08,
+     synthetic frames: a 40x10 white band on dim red was a confirmed sign,
+     and without the extent cap a 3-emitter lamp read as text). Known cost:
+     a sign whose letters have blurred into one blob is not a sign, so
+     verify the real print at the far end of its working distance.
+  6. GLOW test on every blob that is not a sign: a lit lamp's colored pixels
+     sit near clipping, so their mean V, 90th-percentile V and the share
+     above a bright level all clear per-color floors (LAMP_GLOW). This is
+     the test that separates a lit lamp from an unlit colored lens or a red
+     poster. The bright share is taken over ALL of the blob's masked pixels
+     and must be at least LAMP_MIN_BRIGHT_PIXELS strong; mean and p90 are
+     then judged on the pixels at or above LIGHT_V_MIN. Review 2026-09-08:
+     judging only the pixels above the floor let a dark lens with one 2 px
+     specular highlight read as red_light, 13 clipped pixels speaking for
+     the whole blob, which a glossy lens under room lights produces.
+     Bench 2026-09-02, exposure locked, before the core test existed: six
+     seconds of a CONFIRMED stop_sign at 14% on a lit red lamp, which on
+     the robot ends the run at a red light; that is the case step 5's
+     layout rule must keep failing.
      Optional spread veto (LAMP_MIN_V_SPREAD, off by default): a lamp falls
      off from centre to rim, a printed sign is flat, so a blob whose V spread
      (p90 minus p10) is under the knob is not a lamp however bright it is.
      Rendered frames 2026-09-07: lamps 61 to 75, flat signs 0 to 4. Turn it
      on (30) once a real lamp's spread has been read off a saved frame; a
      misfire on a real lamp would miss a red light.
-  6. CLIPPED-CORE test on a blob that failed the glow test. A blown-out lamp
+  7. CLIPPED-CORE test on a blob that failed the glow test. A blown-out lamp
      (close, or metered under a long locked exposure) clips to white almost
      to its rim. The saturation floor in step 3 deletes that white core, so
      the glow test only ever sees the thin coloured ring and the halo, whose
@@ -47,22 +67,26 @@ Classical pipeline per frame:
      text is a wide band and a sign's white border is hollow, so a printed
      sign never passes. Review 2026-09-05, synthetic frames: without this
      step every blown red lamp read as stop_sign, at 7% to 32% of the frame.
-  7. red that neither glows nor has a core: stop_sign if >= STOPSIGN_WHITE_FRAC
-     of the blob's interior is white (STOP text and border), otherwise nothing.
-     A regular octagon has circularity 0.95, so shape alone cannot separate a
-     sign from a lamp. Yellow or green that does not glow is nothing: that is
-     an unlit lens on the 3-lens module, which used to report all three
-     colors at once.
-     WHITE is judged inside the FILLED red contour, not the bounding box (a
-     round lamp's box has background in its corners, and a white wall there
-     read as STOP text), and RELATIVE to the blob's own red: S under WHITE_S_MAX
-     and V >= STOPSIGN_WHITE_REL x the median V of the red pixels, floored at
-     STOPSIGN_WHITE_V_MIN and capped at STOPSIGN_WHITE_V_CAP so clipped
-     letters still count. A printed sign is a reflector: a darker exposure
-     dims its letters and its red together, so a fixed white floor lost the
-     sign at 0.7x the tuning exposure (review 2026-09-07), which is exactly
-     where the camera's highlight AE constraint puts it with a lamp in frame.
-  8. one lamp per frame. A traffic light shows one color at a time, so the
+     The core is judged at an ABSOLUTE brightness, V >= LAMP_CORE_V_MIN,
+     not at the sign's relative letter floor: a clipped LED core is at the
+     top of the scale whatever the exposure, while a grey V 150 reflection
+     on an unlit lens cleared the relative floor and was a red_light
+     (review 2026-09-08).
+  8. red that is none of those is nothing, and so is yellow or green that
+     does not glow: an unlit lens on the 3-lens module, which used to report
+     all three colors at once. A regular octagon has circularity 0.95, so
+     shape alone cannot separate a sign from a lamp; the text is the tell.
+     WHITE (step 5) is judged inside the FILLED red contour, not the bounding
+     box (a round lamp's box has background in its corners, and a white wall
+     there read as STOP text), and RELATIVE to the blob's own red: S under
+     WHITE_S_MAX and V >= STOPSIGN_WHITE_REL x the median V of the red
+     pixels, floored at STOPSIGN_WHITE_V_MIN and capped at STOPSIGN_WHITE_V_CAP
+     so clipped letters still count. A printed sign is a reflector: a darker
+     exposure dims its letters and its red together, so a fixed white floor
+     lost the sign at 0.7x the tuning exposure (review 2026-09-07), which is
+     exactly where the camera's highlight AE constraint puts it with a lamp
+     in frame.
+  9. one lamp per frame. A traffic light shows one color at a time, so the
      largest glowing blob is reported and only if it beats the runner-up by
      LAMP_WINNER_RATIO; a near-tie reports no lamp that frame and the
      TemporalFilter absorbs the gap. A stop sign is reported alongside.
@@ -99,7 +123,7 @@ def _light_bands(s_min, v_min):
         'green': [((40, s_min, v_min), (90, 255, 255))],
     }
 # White STOP text/border is nearly colorless: S under this. Its brightness
-# floor is relative to the blob (step 7 above), not a constant.
+# floor is relative to the blob (step 8 above), not a constant.
 WHITE_S_MAX = 70
 
 
@@ -126,27 +150,72 @@ def _mask(hsv, prepped):
     return out
 
 
-def _glows(v_vals, v_floor, gate, min_spread=0):
+def _glows(v_vals, v_floor, gate, min_spread=0, min_pixels=16):
     """True if a blob's colored pixels read like a lit lamp.
 
-    v_vals: V channel of the blob's masked pixels. Only those at or above
-    v_floor are judged, so the red blob (masked at the lower sign floor) is
-    scored on the same population as yellow and green. gate is one
-    LAMP_GLOW entry: (mean V, 90th-percentile V, bright share, bright level).
-    min_spread > 0 adds the flatness veto: p90 minus p10 of the same pixels
-    must reach it, because a lamp falls off toward its rim and a printed
-    surface does not.
+    v_vals: V channel of ALL the blob's masked pixels. The bright share is
+    taken over that whole population and has to be at least min_pixels
+    strong, so a dark lens with one specular highlight cannot pass on a
+    dozen clipped pixels (review 2026-09-08). Mean and 90th percentile are
+    then judged on the pixels at or above v_floor, so the red blob (masked
+    at the lower sign floor) is scored on the same population as yellow and
+    green. gate is one LAMP_GLOW entry: (mean V, 90th-percentile V, bright
+    share, bright level). min_spread > 0 adds the flatness veto: p90 minus
+    p10 of the same pixels must reach it, because a lamp falls off toward
+    its rim and a printed surface does not.
     """
     mean_min, peak_min, bright_frac, bright_v = gate
+    if v_vals.size == 0:
+        return False
+    bright = int(np.count_nonzero(v_vals >= max(v_floor, bright_v)))
+    if bright < min_pixels or bright / float(v_vals.size) < bright_frac:
+        return False
     v = v_vals[v_vals >= v_floor]
     if v.size == 0:
         return False
     p10, p90 = np.percentile(v, (10, 90))
     if min_spread > 0 and (p90 - p10) < min_spread:
         return False
-    return (float(v.mean()) >= mean_min
-            and float(p90) >= peak_min
-            and float(np.mean(v >= bright_v)) >= bright_frac)
+    return float(v.mean()) >= mean_min and float(p90) >= peak_min
+
+
+def _has_lettering(white, inside, max_extent):
+    """True if the white inside a red blob is laid out like a row of text.
+
+    white, inside: 0/255 masks the size of the blob's box. The border is
+    stripped by insetting the filled contour 5%, then every white component
+    that is letter-sized (12% to 50% of the blob's height, 1.5% to 35% of
+    its width, centred in the middle half) and not a filled dot (extent
+    under max_extent; a clipped LED emitter is round and solid, a letter is
+    strokes) is a mark. Three marks of similar height on one row spanning
+    35% of the width is text. A single disc, a band, a hollow ring, or a
+    row of emitters is not. Layout, not OCR: letters that have blurred
+    together at distance are rejected too.
+    """
+    bh, bw = white.shape
+    inset = max(1, int(round(min(bh, bw) * 0.05)))
+    interior = cv2.erode(inside, np.ones((2 * inset + 1, 2 * inset + 1), np.uint8),
+                         borderType=cv2.BORDER_CONSTANT, borderValue=0)
+    text = cv2.bitwise_and(white, interior)
+    n, _, stats, cents = cv2.connectedComponentsWithStats(text, connectivity=8)
+    marks = []
+    for i in range(1, n):
+        x, y, w, h, area = stats[i]
+        if (max(3, 0.001 * bw * bh) <= area
+                and 0.12 * bh <= h <= 0.50 * bh
+                and 0.015 * bw <= w <= 0.35 * bw
+                and 0.25 * bh <= cents[i][1] <= 0.75 * bh
+                and area / float(w * h) < max_extent):
+            marks.append((int(x), int(w), int(h), float(cents[i][1])))
+    # Anchor on each mark in turn, so a stray speck cannot break a good row.
+    for _, _, anchor_h, anchor_y in marks:
+        row = [m for m in marks if abs(m[3] - anchor_y) <= 0.12 * bh
+               and 0.55 * anchor_h <= m[2] <= 1.8 * anchor_h]
+        if len(row) >= 3:
+            span = max(x + w for x, w, _, _ in row) - min(x for x, _, _, _ in row)
+            if span >= 0.35 * bw:
+                return True
+    return False
 
 
 def _white_inside(hsv_box, inside, red_v, cfg):
@@ -175,6 +244,8 @@ def _clipped_core(white_box, min_frac, aspect, min_extent, center_tol):
     largest connected component is judged. STOP text is a 3.5:1 band, a
     sign's white border is a hollow ring, and neither sits as a single blob
     at the centre, so a printed sign fails on aspect, extent or position.
+    The caller builds white_box at the absolute LAMP_CORE_V_MIN floor, so a
+    grey reflection never reaches this shape test.
     """
     bh, bw = white_box.shape
     n, _, stats, cents = cv2.connectedComponentsWithStats(white_box, connectivity=8)
@@ -243,27 +314,37 @@ class Detector:
                     continue                # streaks and edge glints, not props
                 box = (slice(y, y + bh), slice(x, x + bw))
                 vals = vch[box][mask[box] > 0]
-                if _glows(vals, cfg.LIGHT_V_MIN, self._glow[color], spread):
-                    if frac > lamps.get(color, 0.0):
-                        lamps[color] = frac
-                    continue
-                # Everything below judges the white INSIDE this blob: its
-                # filled contour, so a white wall behind a lamp stays out.
+                # White is judged INSIDE this blob: its filled contour, so a
+                # white wall behind a lamp stays out.
                 inside = np.zeros((bh, bw), np.uint8)
                 cv2.drawContours(inside, [c - (x, y)], -1, 255, cv2.FILLED)
-                white = _white_inside(hsv[box], inside, vals, cfg)
-                # A blown-out lamp: its glow evidence is the white core the
-                # colour mask threw away, so judge the white's SHAPE.
-                if _clipped_core(white, *self._core):
+                if color == 'red':
+                    # Sign first (step 5): text is the tell, and a lit lamp's
+                    # white is never a text row.
+                    white = _white_inside(hsv[box], inside, vals, cfg)
+                    white_frac = (cv2.countNonZero(white)
+                                  / float(max(1, cv2.countNonZero(inside))))
+                    if (white_frac >= cfg.STOPSIGN_WHITE_FRAC
+                            and _has_lettering(white, inside,
+                                               cfg.STOPSIGN_LETTER_MAX_EXTENT)):
+                        sign = max(sign, frac)
+                        continue
+                if _glows(vals, cfg.LIGHT_V_MIN, self._glow[color], spread,
+                          cfg.LAMP_MIN_BRIGHT_PIXELS):
                     if frac > lamps.get(color, 0.0):
                         lamps[color] = frac
                     continue
-                if color != 'red':
-                    continue                # an unlit yellow/green lens
-                white_frac = (cv2.countNonZero(white)
-                              / float(max(1, cv2.countNonZero(inside))))
-                if white_frac >= cfg.STOPSIGN_WHITE_FRAC and frac > sign:
-                    sign = frac
+                # A blown-out lamp: its glow evidence is the white core the
+                # colour mask threw away, so judge the SHAPE of the white
+                # that is genuinely clipped (step 7).
+                core = ((hsv[box][:, :, 1] < WHITE_S_MAX)
+                        & (vch[box] >= cfg.LAMP_CORE_V_MIN) & (inside > 0))
+                if _clipped_core(core.astype(np.uint8) * 255, *self._core):
+                    if frac > lamps.get(color, 0.0):
+                        lamps[color] = frac
+                    continue
+                # Red with white but no text, or yellow/green that does not
+                # glow: an unlit lens, a reflection, a poster. Nothing.
 
         out = []
         if sign > 0.0:

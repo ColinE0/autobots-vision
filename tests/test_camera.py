@@ -39,7 +39,7 @@ class FakePicamera2:
     def start(self):
         self.started = True
 
-    def capture_array(self, name='main'):
+    def capture_array(self, name='main', wait=None):
         if self._first_none:
             self._first_none = False
             return None
@@ -273,6 +273,19 @@ def test_csi_relock_is_a_no_op_with_both_locks_off():
         assert cam.locked == {}
     finally:
         cam.close()
+
+
+def test_csi_first_frame_timeout_raises_instead_of_hanging():
+    # Flight Zero 2026-09-08: sensor enumerated over i2c but the CSI data
+    # lanes delivered nothing, and CsiCamera hung forever on its first
+    # capture_array. picamera2 raises TimeoutError when wait= is a number.
+    class NoFrames(FakePicamera2):
+        def capture_array(self, name='main', wait=None):
+            assert wait is not None and wait > 0, 'first capture must carry a timeout'
+            raise TimeoutError
+    fake = NoFrames()
+    with pytest.raises(RuntimeError, match='ribbon'):
+        CsiCamera(make_cfg(), _picam2=fake)
 
 
 def test_csi_first_capture_failure_raises():

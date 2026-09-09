@@ -22,6 +22,11 @@ import cv2
 # CSI AWB/AE lock: seconds of settling before the values are frozen (only
 # when CAMERA_LOCK_AWB / CAMERA_LOCK_AE is set), at startup and on relock().
 _LOCK_WARMUP_S = 1.0
+# Seconds to wait for the FIRST frame. A ribbon whose i2c lines work but whose
+# CSI data lanes do not (flight Zero, 2026-09-08: sensor enumerates, libcamera
+# "Camera frontend has timed out" in every mode) never delivers one, and
+# picamera2 then blocks forever inside capture_array. Fail loudly instead.
+_FIRST_FRAME_TIMEOUT_S = 5.0
 
 # libcamera AeConstraintMode, by name. The ints are the enum values from
 # libcamera's control_ids (Normal 0, Highlight 1, Shadows 2); the names are
@@ -138,7 +143,12 @@ class CsiCamera:
         stream = self._picam.create_video_configuration(**stream_kw)
         self._picam.configure(stream)
         self._picam.start()
-        frame = self._picam.capture_array('main')
+        try:
+            # wait=<seconds> makes picamera2 raise TimeoutError instead of
+            # blocking; the fake in tests accepts the same keyword.
+            frame = self._picam.capture_array('main', wait=_FIRST_FRAME_TIMEOUT_S)
+        except TimeoutError:
+            frame = None
         if frame is None or frame.size == 0:
             raise RuntimeError(
                 'CSI camera started but the first capture failed. Check the '

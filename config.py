@@ -162,6 +162,26 @@ LAMP_CORE_MIN_FRAC = 0.10
 LAMP_CORE_ASPECT = (0.6, 1.6)
 LAMP_CORE_MIN_EXTENT = 0.55
 LAMP_CORE_CENTER_TOL = 0.25
+# The core must be genuinely clipped: V at or above this, an absolute floor
+# independent of the sign's relative letter floor above. A grey V 150
+# reflection on an unlit lens cleared the relative floor, passed the shape
+# test and was a red_light (review 2026-09-08). A lit LED core is at the top
+# of the scale whatever the exposure.
+LAMP_CORE_V_MIN = 235
+# The glow test's bright share is over ALL of a blob's masked pixels and
+# needs at least this many bright pixels: a dark lens with one 2 px specular
+# highlight (13 clipped pixels) read as red_light when only the pixels above
+# LIGHT_V_MIN were judged (review 2026-09-08).
+LAMP_MIN_BRIGHT_PIXELS = 16
+# STOP text is a row of at least three letter-sized white marks; each mark
+# must be strokes, not a filled dot: its area over its box under this. A
+# clipped LED emitter is a solid disc (extent 0.79); Hershey and Highway
+# Gothic letters run 0.3 to 0.6. Without the cap a lamp with three emitters
+# in a row read as a stop sign, the run-ending failure of 2026-09-02 again
+# (review 2026-09-08, synthetic). Raise toward 0.8 only if a real sign at
+# the far end of its working distance is lost because its letters blur
+# into solid blobs; check that with tools/test_camera.py --save first.
+STOPSIGN_LETTER_MAX_EXTENT = 0.70
 # Geometric backend (vision/detector_geometric.py): the tunables it shares
 # with the classical path it takes by name (LIGHT_V_MIN, DETECT_MIN_AREA_FRAC,
 # LAMP_GLOW). This one is its own: the largest blob its traffic-light path

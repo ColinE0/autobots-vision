@@ -4,14 +4,15 @@ Frames are drawn at DETECT_PROC_WIDTH so no resize noise enters the asserts.
 BGR colors. A LAMP is drawn at full brightness (V=255), because that is what
 a lit LED does to a sensor: it clips. A SIGN is drawn at V=180: bright enough
 to pass every mask floor, nowhere near clipping, which is what printed paper
-does. The glow test is the only thing separating the two.
+does, and it carries STOP text, because since 2026-09-08 the text layout is
+what makes a sign a sign; the glow test separates a lamp from everything else.
 """
 import numpy as np
 import pytest
 
 cv2 = pytest.importorskip('cv2')
 
-from vision.detector import Detector, make_detector
+from vision.detector import Detector, TemporalFilter, make_detector
 from tests.conftest import make_cfg
 
 W, H = 320, 240
@@ -33,9 +34,9 @@ def labels(dets):
 
 
 def stop_sign(f, center=(160, 80), r=40):
-    cv2.circle(f, center, r, SIGN_RED, -1)
-    cx, cy = center
-    cv2.rectangle(f, (cx - 25, cy - 7), (cx + 25, cy + 7), WHITE, -1)  # "STOP" band
+    # Was a solid white band on a red disc; a band is also what a reflection
+    # on an unlit lens looks like, and it is no longer a sign (2026-09-08).
+    octagon_sign(f, center=center, r=r)
 
 
 def lamp(f, center, r_core, r_ring, r_halo, hue=RED):
@@ -318,12 +319,12 @@ def test_orange_yellow_lamp_is_yellow_not_nothing(cfg):
     assert labels(Detector(cfg).detect(f)) == {'yellow_light'}
 
 
-def test_bright_flat_sign_reads_as_a_lamp_until_the_spread_veto_is_on(cfg):
-    # A printed sign lit to V 240 clears every glow floor. With the veto off
-    # (shipped) it is a red_light, a hold that never clears; with it on, the
-    # flat brightness profile says not a lamp and the text says sign.
+def test_bright_flat_sign_is_a_sign_with_or_without_the_spread_veto(cfg):
+    # A printed sign lit to V 240 clears every glow floor. It used to read as
+    # red_light with the veto off (shipped), a hold that never clears; the
+    # lettering test now runs first, so the text keeps it a sign either way.
     f = octagon_sign(frame(), v=240)
-    assert labels(Detector(cfg).detect(f)) == {'red_light'}
+    assert labels(Detector(cfg).detect(f)) == {'stop_sign'}
     cfg.LAMP_MIN_V_SPREAD = 30
     assert labels(Detector(cfg).detect(f)) == {'stop_sign'}
 
@@ -338,8 +339,127 @@ def test_spread_veto_keeps_every_rendered_lamp(cfg):
 
 
 def test_core_test_is_config_driven(cfg):
-    # Turning the core gate impossible restores the pre-fix reading, which
-    # pins that the fix lives in the four LAMP_CORE_* knobs and nowhere else.
+    # Turning the core gate impossible loses this lamp (it does not glow on
+    # its ring and halo alone), which pins that the recovery lives in the
+    # LAMP_CORE_* knobs; and a clipped core is never STOP text any more.
     cfg.LAMP_CORE_MIN_FRAC = 2.0
     f = lamp(frame(), (160, 80), 29, 31, 45)
+    assert Detector(cfg).detect(f) == []
+
+
+# Reflections and lettering (review 2026-09-08, from the autobots-vision
+# red-fix drop-in). An unlit lens is glossy: under room lights it carries a
+# specular highlight and grey reflections, and each of these used to be a
+# lamp or a sign. Text layout is now what makes a sign a sign.
+
+def dark_lens(f, center=(160, 80), r=30):
+    cv2.circle(f, center, r, LENS_RED, -1)
+    return f
+
+
+@pytest.mark.parametrize('r', [12, 20, 30, 50])
+def test_specular_highlight_does_not_light_an_unlit_lens(cfg, r):
+    # A 2 px clipped dot on a dark lens: 13 bright pixels used to carry the
+    # whole blob through the glow test, because only the pixels above
+    # LIGHT_V_MIN were judged. Now the bright share is over every masked
+    # pixel and needs LAMP_MIN_BRIGHT_PIXELS of support.
+    f = dark_lens(frame(), r=r)
+    cv2.circle(f, (160, 80), 2, RED, -1)
+    assert Detector(cfg).detect(f) == []
+
+
+def test_min_bright_pixels_is_config_driven(cfg):
+    f = dark_lens(frame(), r=12)
+    cv2.circle(f, (160, 80), 2, RED, -1)
+    cfg.LAMP_MIN_BRIGHT_PIXELS = 0
+    cfg.LAMP_GLOW['red'] = (220, 240, 0.0, 220)    # share gate off too
+    assert labels(Detector(cfg).detect(f)) == {'red_light'}
+
+
+@pytest.mark.parametrize('v', [110, 150, 200, 230])
+@pytest.mark.parametrize('shape', ['round', 'band'])
+def test_grey_reflection_on_an_unlit_lens_is_nothing(cfg, v, shape):
+    # A round grey patch cleared the relative letter floor (1.1 x V 120) and
+    # passed the core shape test as a lamp; a grey band cleared the white
+    # share and was a sign. The core now needs LAMP_CORE_V_MIN, the sign
+    # needs text.
+    f = dark_lens(frame())
+    if shape == 'round':
+        cv2.circle(f, (160, 80), 13, (v, v, v), -1)
+    else:
+        cv2.rectangle(f, (140, 75), (180, 85), (v, v, v), -1)
+    assert Detector(cfg).detect(f) == []
+
+
+def test_white_band_on_dim_red_is_not_a_sign(cfg):
+    # The old stop_sign fixture: 14% white in one band, no letters.
+    f = dark_lens(frame())
+    cv2.rectangle(f, (140, 75), (180, 85), WHITE, -1)
+    assert Detector(cfg).detect(f) == []
+
+
+def test_core_floor_is_config_driven(cfg):
+    f = dark_lens(frame())
+    cv2.circle(f, (160, 80), 13, (230, 230, 230), -1)
+    assert Detector(cfg).detect(f) == []
+    cfg.LAMP_CORE_V_MIN = 225
+    assert labels(Detector(cfg).detect(f)) == {'red_light'}
+
+
+def test_reflections_never_confirm(cfg):
+    f = frame()
+    dark_lens(f, center=(100, 80))
+    cv2.rectangle(f, (80, 75), (120, 85), (150, 150, 150), -1)
+    dark_lens(f, center=(240, 80), r=20)
+    cv2.circle(f, (240, 80), 2, RED, -1)
+    det, filt = Detector(cfg), TemporalFilter(cfg)
+    for _ in range(10):
+        filt.update(det.detect(f))
+        assert not filt.confirmed('red_light')
+        assert not filt.confirmed('stop_sign')
+
+
+@pytest.mark.parametrize('dots,rad', [(3, 6), (4, 6), (3, 8), (5, 5)])
+def test_multi_emitter_lamp_is_a_lamp_not_text(cfg, dots, rad):
+    # A lit lens with several clipped emitters in a row is three or more
+    # white marks on one line, which is what STOP text is, too. The marks
+    # are solid discs, and STOPSIGN_LETTER_MAX_EXTENT is what tells them
+    # from letter strokes. Without it this was a stop_sign: the run-ending
+    # 2026-09-02 failure back again by a different road.
+    f = frame()
+    cv2.circle(f, (160, 80), 40, RED, -1)
+    for x in np.linspace(160 - 24, 160 + 24, dots).astype(int):
+        cv2.circle(f, (int(x), 80), rad, WHITE, -1)
+    f = cv2.GaussianBlur(f, (3, 3), 0)
+    assert labels(Detector(cfg).detect(f)) == {'red_light'}
+
+
+def test_letter_extent_cap_is_what_rejects_emitters(cfg):
+    f = frame()
+    cv2.circle(f, (160, 80), 40, RED, -1)
+    for x in np.linspace(160 - 24, 160 + 24, 4).astype(int):
+        cv2.circle(f, (int(x), 80), 6, WHITE, -1)
+    f = cv2.GaussianBlur(f, (3, 3), 0)
+    cfg.STOPSIGN_LETTER_MAX_EXTENT = 1.01
     assert labels(Detector(cfg).detect(f)) == {'stop_sign'}
+
+
+def shrunk_sign(across, v=180):
+    """The octagon_sign fixture (80 px across) shrunk to `across` pixels with
+    area interpolation, so stroke widths scale with the sign as they would
+    with distance."""
+    big = octagon_sign(frame(), v=v)
+    patch = big[30:130, 110:210]
+    sz = max(4, int(round(100 * across / 80.0)))
+    f = frame()
+    y0, x0 = 80 - sz // 2, 160 - sz // 2
+    f[y0:y0 + sz, x0:x0 + sz] = cv2.resize(patch, (sz, sz), interpolation=cv2.INTER_AREA)
+    return f
+
+
+@pytest.mark.parametrize('across', [32, 40, 56, 80])
+def test_sign_range_holds_with_the_lettering_test(cfg, across):
+    # STOPSIGN_ACT_AREA_FRAC (1.2%) is a sign about 30 px across, and the
+    # lettering test must not lose the sign before the pilot acts on it.
+    # 32 px was the floor before the test existed (review 2026-09-08).
+    assert labels(Detector(cfg).detect(shrunk_sign(across))) == {'stop_sign'}, across
