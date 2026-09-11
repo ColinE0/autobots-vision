@@ -6,7 +6,8 @@ Camera capture. Two backends behind make_camera(), picked by CAMERA_BACKEND:
          in BGR order, so there is no MJPG decode and no USB stack in the
          path. The SENSOR mode is named by CAMERA_SENSOR_SIZE (full frame),
          because left to itself picamera2 picks a centre crop for a small
-         main stream. The robot camera as of 2026-07-20.
+         main stream. The robot camera as of 2026-07-20. CAMERA_RECORD adds
+         a second stream on the hardware H.264 encoder; see _start_recording.
   "usb"  UsbCamera: DFRobot FIT0701 or any V4L2 webcam (the bench spare).
 
 Both free-run a capture thread that keeps only the newest frame, so the
@@ -14,6 +15,7 @@ vision loop always processes the freshest image and never blocks the control
 loop. read() returns (frame_id, frame). Callers compare frame_id to skip
 work when no new frame has arrived.
 """
+import pathlib
 import threading
 import time
 
@@ -110,6 +112,22 @@ class UsbCamera:
         self._cap.release()
 
 
+def _start_recording(picam, cfg, path):
+    """Attach the Pi's hardware H.264 encoder to the recording stream.
+
+    Imported here rather than at module scope so the suite still runs off-Pi,
+    and kept as a function so a test can replace it. The encoder runs on the
+    VideoCore block, not the A53s, which is the whole point: the capture
+    thread and the detector keep the cores they already have.
+    """
+    from picamera2.encoders import H264Encoder      # apt: python3-picamera2
+    from picamera2.outputs import FileOutput
+    bitrate = int(getattr(cfg, 'CAMERA_RECORD_BITRATE', 1_500_000))
+    encoder = H264Encoder(bitrate=bitrate)
+    picam.start_encoder(encoder, FileOutput(str(path)), name='lores')
+    return encoder
+
+
 class CsiCamera:
     # picamera2 capture for the Arducam IMX219 (or any libcamera CSI module).
     def __init__(self, cfg, _picam2=None):
@@ -140,6 +158,14 @@ class CsiCamera:
         if sensor is not None:
             stream_kw['raw'] = {'size': tuple(sensor)}
         self.sensor_size = None if sensor is None else tuple(sensor)
+        # Recording stream. picamera2 requires the second stream to be YUV420
+        # and no larger than main, so it matches main exactly: the recording
+        # is the detector's own view, frame for frame. getattr keeps a config
+        # that predates recording working unchanged.
+        record = bool(getattr(cfg, 'CAMERA_RECORD', False))
+        if record:
+            stream_kw['lores'] = {'size': (cfg.CAMERA_WIDTH, cfg.CAMERA_HEIGHT),
+                                  'format': 'YUV420'}
         stream = self._picam.create_video_configuration(**stream_kw)
         self._picam.configure(stream)
         self._picam.start()
@@ -165,6 +191,15 @@ class CsiCamera:
             # a red lamp only detected after the camera was nudged upward.
             time.sleep(_LOCK_WARMUP_S)
             self._freeze()
+        # Started AFTER the lock so the whole recording is shot at one
+        # exposure, the same reason the header logs the locked values.
+        self.recording_path = None
+        self._encoder = None
+        if record:
+            directory = pathlib.Path(getattr(cfg, 'CAMERA_RECORD_DIR', 'recordings'))
+            directory.mkdir(parents=True, exist_ok=True)
+            self.recording_path = directory / time.strftime('run-%Y%m%d-%H%M%S.h264')
+            self._encoder = _start_recording(self._picam, cfg, self.recording_path)
         self._lock = threading.Lock()
         self._frame = frame
         self._frame_id = 1
@@ -248,6 +283,12 @@ class CsiCamera:
 
     def close(self):
         self._run = False
+        if self._encoder is not None:
+            try:
+                self._picam.stop_encoder()   # flushes the file before stop()
+            except Exception:
+                pass
+            self._encoder = None
         try:
             self._picam.stop()           # unblocks a capture_array in flight
         except Exception:

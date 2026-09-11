@@ -21,7 +21,8 @@ tests/      whatever we can run without the robot
 tools/      bench scripts. tools/range_check.py is the live ToF readout,
             tools/detect_preview.py is the live detection preview (geometric,
             draws boxes), tools/test_camera.py is the backend-switched
-            camera + detector smoke test (prints FPS and labels)
+            camera + detector smoke test (prints FPS and labels), with
+            --record to capture the run through the hardware H.264 encoder
 ```
 
 The tests run on any machine, no sensor needed, a fake stands in for it:

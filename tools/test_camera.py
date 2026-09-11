@@ -8,6 +8,7 @@ the lens barrel needs a twist (the Arducam IMX219 focuses by rotating it).
     python3 -m tools.test_camera          confirmed view: what the pilot acts on
     python3 -m tools.test_camera --raw    unfiltered per-frame detector output
     python3 -m tools.test_camera --save   also keep the frame on every change
+    python3 -m tools.test_camera --record record the whole run to recordings/
 
 The default runs detections through the robot's TemporalFilter (K-of-N
 confirmation) so what prints is what the pilot would actually see. --raw
@@ -25,6 +26,13 @@ backends, resolution, view mode and the locked exposure.
 a PNG named by time, frame id and labels, so a surprising detection can be
 re-run through the detector on a laptop instead of argued about from a log
 line. Works in both views.
+
+--record (csi only) records the whole run instead of single frames, through
+the Pi's hardware H.264 encoder, so it costs the cores almost nothing. The
+file is raw .h264 in recordings/ at the detector's own resolution: it shows
+what the detector was handed, not what the lens saw. Convert it with ffmpeg,
+e.g. ffmpeg -r 30 -i run-....h264 -c copy run.mp4. Compare the FPS line with
+and without it before trusting a run recorded this way.
 """
 import sys, time, pathlib
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -45,9 +53,18 @@ def main():
     args = sys.argv[1:]
     raw = '--raw' in args
     save = '--save' in args
+    record = '--record' in args
     frames_dir = ROOT / 'frames'
     if save:
         frames_dir.mkdir(exist_ok=True)
+    if record and config.CAMERA_BACKEND != 'csi':
+        # The encoder is a Pi block; the webcam path has nothing to hand it.
+        print(f"[test_camera] --record needs CAMERA_BACKEND='csi', "
+              f"not {config.CAMERA_BACKEND!r}. Recording off for this run.")
+        record = False
+    if record:
+        config.CAMERA_RECORD = True
+        config.CAMERA_RECORD_DIR = ROOT / config.CAMERA_RECORD_DIR
     cam = make_camera(config)
     det = make_detector(config)
     filt = None if raw else TemporalFilter(config)
@@ -74,11 +91,12 @@ def main():
                      f"{config.CAMERA_WIDTH}x{config.CAMERA_HEIGHT}@{config.CAMERA_FPS} "
                      f"sensor={sensor_note} "
                      f"view={view} meter=[{meter_note}] exposure=[{lock_note}] "
-                     f"save={save}")
+                     f"save={save} record={getattr(cam, 'recording_path', None) or False}")
     print(f"camera={config.CAMERA_BACKEND}  detector={config.DETECTOR_BACKEND}  "
           f"view={view}. Ctrl+C to quit. Logging to {log.path}"
-          + (f", frames to {frames_dir}" if save else '') + "\n")
-    last_id, n, t0 = -1, 0, time.monotonic()
+          + (f", frames to {frames_dir}" if save else '')
+          + (f", recording to {cam.recording_path}" if record else '')
+          + "\n")
     last_key = None
     try:
         while True:

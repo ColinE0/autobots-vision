@@ -92,6 +92,16 @@ CAMERA_AE_CONSTRAINT = 'highlight'
 # a V 180 printed sign one stop under reads about V 90, still over SIGN_V_MIN.
 CAMERA_EV = 0.0
 
+# Run recording (csi only). Records what the DETECTOR sees, through the Pi's
+# hardware H.264 encoder on a second stream, so the ARM cores never touch the
+# pixels and the frame rate barely moves. The recording stream is deliberately
+# the same size as the main stream: a run is worth keeping because it shows
+# what the detector was handed, not because it is pretty. Off by default;
+# tools/test_camera.py --record turns it on for one run.
+CAMERA_RECORD = False
+CAMERA_RECORD_BITRATE = 1_500_000   # ~0.2 MB/s at 320x240, ~11 MB a minute
+CAMERA_RECORD_DIR = 'recordings'    # gitignored; files are raw .h264
+
 # Detector backend, picked by vision.detector.make_detector():
 #   'classical'  HSV masks + contour gates + white-content stop/lamp split
 #                (the robot's detector; 10-20 FPS on the Zero 2 W)
