@@ -8,6 +8,7 @@ the lens barrel needs a twist (the Arducam IMX219 focuses by rotating it).
     python3 -m tools.test_camera          confirmed view: what the pilot acts on
     python3 -m tools.test_camera --raw    unfiltered per-frame detector output
     python3 -m tools.test_camera --no-save  do not keep stills this run
+    python3 -m tools.test_camera --stream   print EVERY frame, not just changes
     python3 -m tools.test_camera --exposure 4000   pin exposure, in us
 
 The default runs detections through the robot's TemporalFilter (K-of-N
@@ -15,6 +16,12 @@ confirmation) so what prints is what the pilot would actually see. --raw
 bypasses it and shows every per-frame result, which is far noisier and is a
 debugging view, not a measure of detector quality: single-frame flips are
 what the filter exists to absorb.
+
+--stream prints a line for every frame instead, the way a continuous readout
+does, which is easier to read live when you are moving a prop around and want
+to see the detector react. It goes to the console only: at 30 Hz it would bury
+the transitions and FPS lines that make the log worth keeping. Use it while
+aiming and tuning; leave it off for a run you intend to read later.
 
 Detections print when the SET OF LABELS changes, not on a timer, so a
 hand-held prop reads as transitions rather than a 1-in-60 sample. FPS is
@@ -44,10 +51,16 @@ from tools.sessionlog import SessionLog
 LABELS = ('stop_sign', 'red_light', 'yellow_light', 'green_light')
 
 
+def format_labels(shown):
+    """One line of detections, or "-" when there are none."""
+    return ', '.join(f"{lbl}({frac * 100:.1f}%)" for lbl, frac in shown) or '-'
+
+
 def main():
     args = sys.argv[1:]
     raw = '--raw' in args
     save = getattr(config, 'CAMERA_SAVE_FRAMES', True) and '--no-save' not in args
+    stream = '--stream' in args
     if '--exposure' in args:
         # Venue calibration knob. Sweep it here rather than editing config.py
         # between runs, then write the value that works into the config.
@@ -106,10 +119,14 @@ def main():
                          if filt.confirmed(lbl)]
             # Key on the labels alone. area_frac jitters every frame, so
             # keying on the printed string would emit at the frame rate.
+            if stream:
+                # Console only, deliberately NOT through the log: at 30 Hz
+                # this would bury the transitions and the FPS lines that
+                # make an old log readable months later.
+                print(f"{fid:>7}  {format_labels(shown)}", flush=True)
             key = tuple(lbl for lbl, _ in shown)
             if key != last_key:
-                labels = ', '.join(
-                    f"{lbl}({frac*100:.1f}%)" for lbl, frac in shown) or '-'
+                labels = format_labels(shown)
                 print(log.line(labels, echo=False), flush=True)
                 if save and saved < cap:
                     name = (f"{time.strftime('%Y%m%d-%H%M%S')}_{fid}_"
