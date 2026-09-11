@@ -1,3 +1,5 @@
+import time
+
 import cv2
 from picamera2 import Picamera2
 
@@ -6,6 +8,10 @@ from traffic_light_detector import detect_traffic_light
 
 
 picam2 = None
+
+# How often the frame rate is reported, in seconds. Printed on its own line
+# so it never interleaves with a detection line.
+FPS_REPORT_SECONDS = 2.0
 
 
 def setup_camera():
@@ -269,6 +275,11 @@ def main():
 
     print("Camera started.")
 
+    # Frame rate is measured over the whole loop, capture and detection
+    # together, which is what the robot actually gets.
+    frame_count = 0
+    window_start = time.monotonic()
+
     try:
 
         while True:
@@ -281,6 +292,23 @@ def main():
 
             # Print detections.
             print_vision_data(vision_data)
+
+            # Report the frame rate on a fixed interval.
+            frame_count += 1
+            elapsed = time.monotonic() - window_start
+
+            if elapsed >= FPS_REPORT_SECONDS:
+
+                print(f'FPS = {frame_count / elapsed:.1f}')
+
+                frame_count = 0
+                window_start = time.monotonic()
+
+    except KeyboardInterrupt:
+
+        # Ctrl+C is how this program is meant to end; print a clean line
+        # instead of a traceback from wherever the detector happened to be.
+        print("\nStopped.")
 
     finally:
 
