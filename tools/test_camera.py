@@ -97,6 +97,7 @@ def main():
           + (f", frames to {frames_dir}" if save else '')
           + (f", recording to {cam.recording_path}" if record else '')
           + "\n")
+    last_id, n, t0 = -1, 0, time.monotonic()
     last_key = None
     try:
         while True:
