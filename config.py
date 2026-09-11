@@ -119,7 +119,16 @@ CAMERA_EV = 0.0
 # libcamera, so a missing flag shows up as a failure.
 CAMERA_ROTATE_180 = True
 
-CAMERA_EXPOSURE_US = None
+# 4000 chosen 2026-09-11 on the bench, from a sweep at close range with a bare
+# red LED. At 8000 and 4000 the lamp detected in 100% of frames; 4000 is taken
+# because only 1% of its clipped pixels had lost their colour against 8% at
+# 8000, which is margin against a brighter lamp than the test prop. Ambient at
+# 4000 measured centre V 9, i.e. effectively black, which is the point.
+# UNTESTED AND LOAD-BEARING: no printed stop sign has been seen at this
+# exposure. A sign is not an emitter and needs ambient, so it may be invisible
+# here. If it is, one fixed exposure cannot serve both and the answer is
+# alternating exposures, not a different number.
+CAMERA_EXPOSURE_US = 4000
 CAMERA_ANALOGUE_GAIN = 1.0   # sensor gain while fixed; raise only if 1.0 is dark
 
 

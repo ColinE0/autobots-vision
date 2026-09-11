@@ -84,7 +84,7 @@ def test_make_camera_rejects_unknown_backend():
 
 
 def test_csi_configures_stream_from_config():
-    cfg = make_cfg(CAMERA_WIDTH=320, CAMERA_HEIGHT=240, CAMERA_FPS=30,
+    cfg = make_cfg(CAMERA_EXPOSURE_US=None, CAMERA_WIDTH=320, CAMERA_HEIGHT=240, CAMERA_FPS=30,
                    CAMERA_AE_CONSTRAINT='highlight', CAMERA_EV=0.0)
     fake = FakePicamera2()
     cam = CsiCamera(cfg, _picam2=fake)
@@ -196,7 +196,7 @@ def test_csi_awb_lock_freezes_measured_gains(monkeypatch):
 def test_csi_ae_lock_freezes_measured_exposure(monkeypatch):
     monkeypatch.setattr(camera_mod, '_LOCK_WARMUP_S', 0.0)
     fake = FakePicamera2()
-    cam = CsiCamera(make_cfg(CAMERA_LOCK_AWB=False, CAMERA_LOCK_AE=True), _picam2=fake)
+    cam = CsiCamera(make_cfg(CAMERA_EXPOSURE_US=None, CAMERA_LOCK_AWB=False, CAMERA_LOCK_AE=True), _picam2=fake)
     try:
         assert {'AeEnable': False, 'ExposureTime': 19999,
                 'AnalogueGain': 2.5} in fake.controls_set
@@ -212,7 +212,7 @@ def test_csi_ae_lock_at_the_frame_ceiling_warns(monkeypatch, capsys):
     monkeypatch.setattr(camera_mod, '_LOCK_WARMUP_S', 0.0)
     fake = FakePicamera2()
     fake.metadata['ExposureTime'] = 33000        # of a 33333 us frame at 30 fps
-    cam = CsiCamera(make_cfg(CAMERA_LOCK_AWB=False, CAMERA_LOCK_AE=True,
+    cam = CsiCamera(make_cfg(CAMERA_EXPOSURE_US=None, CAMERA_LOCK_AWB=False, CAMERA_LOCK_AE=True,
                              CAMERA_FPS=30), _picam2=fake)
     try:
         assert cam.exposure_at_ceiling
@@ -236,7 +236,7 @@ def test_csi_ae_lock_skipped_when_metadata_lacks_keys(monkeypatch):
     monkeypatch.setattr(camera_mod, '_LOCK_WARMUP_S', 0.0)
     fake = FakePicamera2()
     fake.metadata = {'ColourGains': (1.8, 1.5)}      # sensor reports no exposure
-    cam = CsiCamera(make_cfg(CAMERA_LOCK_AWB=True, CAMERA_LOCK_AE=True), _picam2=fake)
+    cam = CsiCamera(make_cfg(CAMERA_EXPOSURE_US=None, CAMERA_LOCK_AWB=True, CAMERA_LOCK_AE=True), _picam2=fake)
     try:
         assert all('AeEnable' not in c for c in fake.controls_set)
         assert cam.locked == {'ColourGains': (1.8, 1.5)}
@@ -249,7 +249,7 @@ def test_csi_relock_remeters_now_and_freezes_from_the_capture_thread(monkeypatch
     # thread (not the caller) pins the new values once the warmup passes.
     monkeypatch.setattr(camera_mod, '_LOCK_WARMUP_S', 0.0)
     fake = FakePicamera2(frames=400, frame_delay=0.005)    # ~2 s of live frames
-    cam = CsiCamera(make_cfg(CAMERA_LOCK_AWB=True, CAMERA_LOCK_AE=True), _picam2=fake)
+    cam = CsiCamera(make_cfg(CAMERA_EXPOSURE_US=None, CAMERA_LOCK_AWB=True, CAMERA_LOCK_AE=True), _picam2=fake)
     try:
         assert cam.locked['ExposureTime'] == 19999          # the boot lock
         fake.metadata = {'ColourGains': (2.0, 1.2),
@@ -270,7 +270,7 @@ def test_csi_relock_remeters_now_and_freezes_from_the_capture_thread(monkeypatch
 
 def test_csi_relock_is_a_no_op_with_both_locks_off():
     fake = FakePicamera2()
-    cam = CsiCamera(make_cfg(CAMERA_LOCK_AWB=False, CAMERA_LOCK_AE=False), _picam2=fake)
+    cam = CsiCamera(make_cfg(CAMERA_EXPOSURE_US=None, CAMERA_LOCK_AWB=False, CAMERA_LOCK_AE=False), _picam2=fake)
     try:
         cam.relock()
         assert fake.controls_set == []
@@ -381,3 +381,12 @@ def test_shipped_config_still_carries_the_rotation_flag():
     # the real config module, not on make_cfg's copy.
     import config as shipped
     assert getattr(shipped, 'CAMERA_ROTATE_180', None) is True
+
+
+def test_shipped_config_pins_the_bench_exposure():
+    # 4000 us was measured, not guessed (2026-09-11 sweep). Guarded for the
+    # same reason as the rotation flag: a config value that silently reverts
+    # to None hands the run back to the room and nothing else would notice.
+    import config as shipped
+    assert shipped.CAMERA_EXPOSURE_US == 4000
+    assert shipped.CAMERA_ANALOGUE_GAIN == 1.0
