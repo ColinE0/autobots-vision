@@ -59,6 +59,7 @@ import statistics
 from collections import Counter
 import sys, time, pathlib
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+FRAMES_DIR = ROOT / 'frames'
 sys.path.insert(0, str(ROOT))
 import cv2
 import config
@@ -94,10 +95,13 @@ def sweep(exposures, dwell, log):
         seen = {c: [] for c in COLOURS}
         centre = []
         peak = []
+        clip_px = []
+        clip_s = []
         fails = {c: [] for c in COLOURS}
         confirmed = {c: 0 for c in COLOURS}
         frames = 0
         last_id = -1
+        last_frame = None
         deadline = time.monotonic() + dwell
         try:
             while time.monotonic() < deadline:
@@ -111,6 +115,20 @@ def sweep(exposures, dwell, log):
                 # Brightest pixel anywhere. With no blob this is the only
                 # evidence of whether the frame held anything at all.
                 peak.append(int(frame.max()))
+                # A clipped EMITTER goes white: V at 255 with the colour
+                # washed out of it. Counting those pixels and reading their
+                # saturation separates 'lamp too bright for this exposure'
+                # from 'nothing lit', which peak brightness alone cannot.
+                hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+                mask = hsv[:, :, 2] >= 250
+                n = int(mask.sum())
+                clip_px.append(n)
+                # Mean saturation over the clipped pixels is useless: the
+                # coloured ring around a white core is clipped too and drags
+                # the average up. What separates the cases is the SHARE of
+                # clipped pixels that have lost their colour entirely.
+                sat = hsv[:, :, 1][mask]
+                clip_s.append(float((sat < 60).mean()) if n else None)
                 stats = probe.measure(frame)
                 for colour in COLOURS:
                     st = stats.get(colour)
@@ -122,12 +140,18 @@ def sweep(exposures, dwell, log):
                     key = LABEL_TO_COLOUR.get(d.label)
                     if key:
                         confirmed[key] += 1
+                last_frame = frame
         finally:
             cam.close()
+        if last_frame is not None:
+            FRAMES_DIR.mkdir(exist_ok=True)
+            cv2.imwrite(str(FRAMES_DIR / f'sweep_{us}us.png'), last_frame)
         scene = {
             'us': us, 'frames': frames,
             'centre_v': _median([c[2] for c in centre]),
             'peak_v': _median(peak),
+            'clip_px': _median(clip_px),
+            'clip_white': _median(clip_s),
         }
         scenes.append(scene)
         for colour in COLOURS:
@@ -176,17 +200,23 @@ def report_sweep(rows, scenes=(), log=None):
     if scenes:
         print()
         print(log.line(f"{'exposure':>9}{'frames':>8}{'centre V':>10}{'peak V':>8}"
-                       "   scene", echo=False), flush=True)
+                       f"{'clipped':>9}{'white%':>8}   scene", echo=False), flush=True)
         for s in scenes:
             peak = s['peak_v'] or 0
+            clip = s.get('clip_px') or 0
+            white = s.get('clip_white')
             if peak < 40:
                 note = 'black: nothing lit, or every exposure far too short'
-            elif peak < 200:
-                note = 'dim: no clipped highlight, so no lamp core to find'
+            elif clip and white is not None and white > 0.3:
+                note = 'clipped to WHITE: an emitter too bright for this exposure'
+            elif clip:
+                note = 'clipping but still coloured: a lamp the mask can see'
             else:
-                note = 'something in frame is at or near clipping'
+                note = 'dim: no clipped highlight, so no lamp core to find'
             print(log.line(f"{s['us']:>9}{s['frames']:>8}{_fmt(s['centre_v']):>10}"
-                           f"{_fmt(s['peak_v']):>8}   {note}", echo=False), flush=True)
+                           f"{_fmt(s['peak_v']):>8}{_fmt(clip):>9}"
+                           f"{'-' if white is None else format(white, '.0%'):>8}"
+                           f"   {note}", echo=False), flush=True)
     print()
 
 
@@ -196,6 +226,8 @@ def main():
     hz = 2.0
     if '--hz' in args:
         hz = float(args[args.index('--hz') + 1])
+    if '--exposure' in args:
+        config.CAMERA_EXPOSURE_US = int(args[args.index('--exposure') + 1])
     if '--sweep' in args:
         i = args.index('--sweep')
         nxt = args[i + 1] if len(args) > i + 1 else ''

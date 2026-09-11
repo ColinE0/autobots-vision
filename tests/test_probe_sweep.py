@@ -104,3 +104,20 @@ def test_report_survives_a_sweep_with_no_data_at_all():
     log = Log()
     probe_hsv.report_sweep([], (), log=log)
     assert any('exposure' in line for line in log.lines)
+
+
+def test_report_separates_a_white_clipped_emitter_from_a_coloured_one():
+    # Both clip. Only the share of clipped pixels that lost their colour
+    # tells you the exposure is too long for this lamp, and mean saturation
+    # cannot: the coloured ring around a white core drags it up.
+    log = Log()
+    probe_hsv.report_sweep([], [{'us': 4000, 'frames': 100, 'centre_v': 8,
+                                 'peak_v': 255, 'clip_px': 900,
+                                 'clip_white': 0.82}], log=log)
+    assert 'clipped to WHITE' in ' '.join(log.lines)
+
+    log = Log()
+    probe_hsv.report_sweep([], [{'us': 4000, 'frames': 100, 'centre_v': 8,
+                                 'peak_v': 255, 'clip_px': 900,
+                                 'clip_white': 0.0}], log=log)
+    assert 'still coloured' in ' '.join(log.lines)
