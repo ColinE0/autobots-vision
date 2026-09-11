@@ -131,7 +131,15 @@ LAMP_GLOW = {
     'green':  (185, 220, 0.25, 205),
 }
 LAMP_WINNER_RATIO = 1.2       # one lamp per frame: biggest must beat the next by this
-DETECT_MIN_AREA_FRAC = 0.002  # ignore blobs smaller than 0.2% of the frame
+# Ignore blobs smaller than this fraction of the frame. Was 0.002, tuned when
+# the camera was still on the 640x480 centre crop, where a prop reads about
+# 6.6x larger in area fraction than it does on the full frame named by
+# CAMERA_SENSOR_SIZE. Lowered 2026-09-11 against 37 real post-rotation frames:
+# green recovered from 8 to 16 of them and stopped improving at 0.0005, so
+# below this another gate binds and going lower buys nothing but risk. It
+# recovered ZERO extra red frames; red is gated elsewhere (see the merge note
+# on LAMP_GLOW usage), so do not chase red by lowering this further.
+DETECT_MIN_AREA_FRAC = 0.0005
 CONFIRM_FRAMES_N = 3          # TemporalFilter window ...
 CONFIRM_FRAMES_K = 2          # ... act on K of the last N frames
 STOPSIGN_WHITE_FRAC = 0.06     # white STOP text/border separates sign from lamp:
