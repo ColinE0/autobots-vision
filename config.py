@@ -98,6 +98,14 @@ CAMERA_EV = 0.0
 # the same size as the main stream: a run is worth keeping because it shows
 # what the detector was handed, not because it is pretty. Off by default;
 # tools/test_camera.py --record turns it on for one run.
+# The camera is mounted upside down on the chassis, confirmed 2026-09-11 from a
+# saved frame: the scene arrives rotated 180. Corrected on the ISP, which is
+# free, rather than with a cv2.flip on every frame, which is not. It must be
+# BOTH axes. A vertical flip alone mirrors left and right, and
+# DETECT_IGNORE_BOTTOM_FRAC and the detector's centring gates would then be
+# quietly wrong instead of loudly wrong. Set False if the camera is remounted.
+CAMERA_ROTATE_180 = True
+
 CAMERA_RECORD = False
 CAMERA_RECORD_BITRATE = 1_500_000   # ~0.2 MB/s at 320x240, ~11 MB a minute
 CAMERA_RECORD_DIR = 'recordings'    # gitignored; files are raw .h264

@@ -32,8 +32,10 @@ class FakePicamera2:
         self.encoders = []
         self.encoder_stopped = False
 
-    def create_video_configuration(self, main=None, controls=None, raw=None, lores=None):
-        return {'main': main, 'controls': controls, 'raw': raw, 'lores': lores}
+    def create_video_configuration(self, main=None, controls=None, raw=None,
+                                   lores=None, transform=None):
+        return {'main': main, 'controls': controls, 'raw': raw, 'lores': lores,
+                'transform': transform}
 
     def configure(self, cfg):
         self.video_config = cfg
@@ -349,3 +351,29 @@ def test_csi_close_stops_the_encoder_before_the_camera(monkeypatch, tmp_path):
     cam.close()
     assert fake.encoder_stopped
     assert fake.closed
+
+def test_csi_rotates_on_the_isp_when_the_mount_is_upside_down(monkeypatch):
+    # The chassis mount inverts the camera. Correcting it in the stream
+    # configuration costs nothing; flipping every frame in OpenCV would.
+    monkeypatch.setattr(camera_mod, '_rotation_transform',
+                        lambda cfg: 'hflip+vflip' if cfg.CAMERA_ROTATE_180 else None)
+    fake = FakePicamera2()
+    cam = CsiCamera(make_cfg(CAMERA_ROTATE_180=True), _picam2=fake)
+    cam.close()
+    assert fake.video_config['transform'] == 'hflip+vflip'
+    assert cam.rotated is True
+
+
+def test_csi_sends_no_transform_when_the_mount_is_upright(monkeypatch):
+    monkeypatch.setattr(camera_mod, '_rotation_transform', lambda cfg: None)
+    fake = FakePicamera2()
+    cam = CsiCamera(make_cfg(CAMERA_ROTATE_180=False), _picam2=fake)
+    cam.close()
+    assert fake.video_config['transform'] is None
+    assert cam.rotated is False
+
+
+def test_rotation_transform_is_skipped_entirely_when_the_flag_is_off():
+    # Guards the lazy libcamera import: off-Pi the module is absent, so a
+    # config with the flag clear must never reach the import at all.
+    assert camera_mod._rotation_transform(make_cfg(CAMERA_ROTATE_180=False)) is None

@@ -112,6 +112,23 @@ class UsbCamera:
         self._cap.release()
 
 
+def _rotation_transform(cfg):
+    """180 rotation for an upside-down mount, applied by the ISP."""
+    if not getattr(cfg, 'CAMERA_ROTATE_180', False):
+        return None
+    try:
+        from libcamera import Transform   # comes with python3-picamera2
+    except ImportError:
+        # Off-Pi only, which means the suite. On real hardware picamera2
+        # itself would have failed to import long before this line, so
+        # this can never quietly drop the rotation on the robot.
+        return None
+    # Both axes, always. A vflip alone is a mirror, not a rotation: left and
+    # right swap, and every centring gate in the detector then judges a world
+    # that does not exist. Free here; a per-frame cv2.flip is not.
+    return Transform(hflip=1, vflip=1)
+
+
 def _start_recording(picam, cfg, path):
     """Attach the Pi's hardware H.264 encoder to the recording stream.
 
@@ -166,6 +183,10 @@ class CsiCamera:
         if record:
             stream_kw['lores'] = {'size': (cfg.CAMERA_WIDTH, cfg.CAMERA_HEIGHT),
                                   'format': 'YUV420'}
+        transform = _rotation_transform(cfg)
+        if transform is not None:
+            stream_kw['transform'] = transform
+        self.rotated = transform is not None
         stream = self._picam.create_video_configuration(**stream_kw)
         self._picam.configure(stream)
         self._picam.start()
