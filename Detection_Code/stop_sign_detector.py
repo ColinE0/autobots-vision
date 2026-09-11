@@ -3,7 +3,10 @@ import numpy as np
 import math
 
 
+# ============================================================
 # Red HSV ranges
+# ============================================================
+
 RED1_LOWER = np.array([0, 120, 70])
 RED1_UPPER = np.array([10, 255, 255])
 
@@ -11,7 +14,10 @@ RED2_LOWER = np.array([170, 120, 70])
 RED2_UPPER = np.array([180, 255, 255])
 
 
+# ============================================================
 # Basic stop-sign requirements
+# ============================================================
+
 STOP_MIN_AREA = 0.00015
 STOP_MAX_AREA = 0.15
 
@@ -21,7 +27,10 @@ STOP_MAX_ASPECT = 1.40
 MIN_EXTENT = 0.40
 
 
+# ============================================================
 # Octagon requirements
+# ============================================================
+
 IDEAL_OCTAGON_ANGLE = 135.0
 MAX_ANGLE_ERROR = 24.3
 
@@ -38,16 +47,17 @@ FAR_MIN_OCTAGON_SCORE = 0.52
 FAR_MIN_SHAPE_MATCH = 0.86
 
 
+# ============================================================
 # Circle rejection
-# A near-perfect circle is more likely to be a traffic-light lens than a stop sign.
-# This is only one filter; low-resolution circles can still appear polygonal.
+# ============================================================
+
 MAX_CIRCLE_FILL = 0.95
 
 
+# ============================================================
 # Red-light rejection
-# These are intentionally a little more forgiving than before.
-# A real red LED can wash toward white in the center, so it may not
-# satisfy the red HSV mask even though it is clearly glowing.
+# ============================================================
+
 RED_LIGHT_MEAN_VALUE = 190
 RED_LIGHT_PEAK_VALUE = 228
 RED_LIGHT_BRIGHT_RATIO = 0.18
@@ -61,22 +71,30 @@ RED_WHITE_MIN_VALUE = 235
 RED_WHITE_MAX_SATURATION = 105
 RED_MIN_WHITE_CORE_RATIO = 0.008
 
-# Center-glow rejection
-# This was added to stop red traffic-light bulbs from being classified as stop signs.
-# An LED/lamp usually has a concentrated bright center and darker outer red pixels.
-# A physical stop sign normally has much more even brightness across its red surface.
+# Center glow rejection
 RED_CENTER_INNER_FRACTION = 0.55
 RED_CENTER_MIN_VALUE_DIFF = 22.0
 RED_CENTER_MIN_RATIO = 1.10
 RED_CENTER_MIN_INNER_VALUE = 205.0
 
+# Extra bulb rejection
+RED_LIGHT_STRONG_HOT_RATIO = 0.14
+RED_LIGHT_STRONG_WHITE_CORE_RATIO = 0.018
+
 RED_WHITE_NEIGHBOR_KERNEL = np.ones((7, 7), np.uint8)
 
 
+# ============================================================
 # Mask-cleaning kernels
+# ============================================================
+
 OPEN_KERNEL = np.ones((3, 3), np.uint8)
 CLOSE_KERNEL = np.ones((5, 5), np.uint8)
 
+
+# ============================================================
+# ROI
+# ============================================================
 
 def get_roi_mask(frame, top_cutoff=0.05, bottom_cutoff=0.80):
     """Create the allowed detection region."""
@@ -92,6 +110,10 @@ def get_roi_mask(frame, top_cutoff=0.05, bottom_cutoff=0.80):
 
     return mask
 
+
+# ============================================================
+# Mask cleanup
+# ============================================================
 
 def clean_mask(mask):
     """Remove small noise and reconnect nearby red regions."""
@@ -110,6 +132,10 @@ def clean_mask(mask):
 
     return mask
 
+
+# ============================================================
+# Red mask
+# ============================================================
 
 def get_red_mask(hsv):
     """Create a mask containing red pixels."""
@@ -134,14 +160,13 @@ def get_red_mask(hsv):
     return clean_mask(red_mask)
 
 
+# ============================================================
+# Red-light rejection
+# ============================================================
+
 def looks_like_red_light(hsv, red_mask):
     """
     Reject red regions that behave like an illuminated red bulb.
-
-    Important change:
-    We do NOT require every brightness metric to pass anymore.
-    A real LED can have a white/blown-out center that disappears from
-    the normal red mask, so we also look for a white-hot core touching red.
     """
 
     if hsv is None or hsv.size == 0:
@@ -152,7 +177,6 @@ def looks_like_red_light(hsv, red_mask):
     if roi_area <= 0:
         return False
 
-    # Brightness of pixels that are still classified as red.
     red_values = hsv[:, :, 2][red_mask > 0]
 
     if red_values.size == 0:
@@ -173,14 +197,24 @@ def looks_like_red_light(hsv, red_mask):
         )
     )
 
-    # Find a white-hot / low-saturation core.
+    # --------------------------------------------------------
+    # White-hot core
+    # --------------------------------------------------------
+
     white_core = cv2.inRange(
         hsv,
-        np.array([0, 0, RED_WHITE_MIN_VALUE]),
-        np.array([180, RED_WHITE_MAX_SATURATION, 255])
+        np.array([
+            0,
+            0,
+            RED_WHITE_MIN_VALUE
+        ]),
+        np.array([
+            180,
+            RED_WHITE_MAX_SATURATION,
+            255
+        ])
     )
 
-    # Only count white-hot pixels that are right next to the red region.
     red_neighborhood = cv2.dilate(
         red_mask,
         RED_WHITE_NEIGHBOR_KERNEL,
@@ -197,17 +231,26 @@ def looks_like_red_light(hsv, red_mask):
         / float(roi_area)
     )
 
-    # Compare the center of the candidate with its outer red region.
-    # A lit bulb normally has a hot center and falls off toward its edge,
-    # while a printed/painted stop sign is much flatter in brightness.
+    # --------------------------------------------------------
+    # Center glow
+    # --------------------------------------------------------
+
     h, w = hsv.shape[:2]
+
     yy, xx = np.ogrid[:h, :w]
 
     cx = (w - 1) / 2.0
     cy = (h - 1) / 2.0
 
-    rx = max(w * RED_CENTER_INNER_FRACTION / 2.0, 1.0)
-    ry = max(h * RED_CENTER_INNER_FRACTION / 2.0, 1.0)
+    rx = max(
+        w * RED_CENTER_INNER_FRACTION / 2.0,
+        1.0
+    )
+
+    ry = max(
+        h * RED_CENTER_INNER_FRACTION / 2.0,
+        1.0
+    )
 
     center_region = (
         ((xx - cx) / rx) ** 2
@@ -216,27 +259,49 @@ def looks_like_red_light(hsv, red_mask):
     )
 
     red_pixels = red_mask > 0
-    inner_pixels = red_pixels & center_region
-    outer_pixels = red_pixels & (~center_region)
+
+    inner_pixels = (
+        red_pixels
+        & center_region
+    )
+
+    outer_pixels = (
+        red_pixels
+        & (~center_region)
+    )
 
     if np.count_nonzero(inner_pixels) > 0:
+
         inner_mean = float(
-            np.mean(hsv[:, :, 2][inner_pixels])
+            np.mean(
+                hsv[:, :, 2][inner_pixels]
+            )
         )
+
     else:
         inner_mean = 0.0
 
     if np.count_nonzero(outer_pixels) > 0:
+
         outer_mean = float(
-            np.mean(hsv[:, :, 2][outer_pixels])
+            np.mean(
+                hsv[:, :, 2][outer_pixels]
+            )
         )
+
     else:
         outer_mean = mean_value
 
-    center_diff = inner_mean - outer_mean
+    center_diff = (
+        inner_mean - outer_mean
+    )
 
     if outer_mean > 0:
-        center_ratio = inner_mean / outer_mean
+
+        center_ratio = (
+            inner_mean / outer_mean
+        )
+
     else:
         center_ratio = 1.0
 
@@ -246,28 +311,58 @@ def looks_like_red_light(hsv, red_mask):
         and center_ratio >= RED_CENTER_MIN_RATIO
     )
 
-    # Path 1:
-    # A normally exposed glowing red bulb.
+    # --------------------------------------------------------
+    # Normal glowing red bulb
+    # --------------------------------------------------------
+
     normal_glow = (
         mean_value >= RED_LIGHT_MEAN_VALUE
         and peak_value >= RED_LIGHT_PEAK_VALUE
         and bright_ratio >= RED_LIGHT_BRIGHT_RATIO
     )
 
-    # Path 2:
-    # A bulb whose center is clipped / washed toward white.
+    # --------------------------------------------------------
+    # Blown-out glowing bulb
+    # --------------------------------------------------------
+
     blown_out_glow = (
         peak_value >= RED_LIGHT_PEAK_VALUE
         and (
-            very_bright_ratio >= RED_LIGHT_VERY_BRIGHT_RATIO
-            or white_core_ratio >= RED_MIN_WHITE_CORE_RATIO
+            very_bright_ratio
+            >= RED_LIGHT_VERY_BRIGHT_RATIO
+
+            or
+
+            white_core_ratio
+            >= RED_MIN_WHITE_CORE_RATIO
         )
     )
 
-    # Path 3:
-    # Strong brightness concentration in the middle of the red candidate.
-    return normal_glow or blown_out_glow or center_glow
+    # --------------------------------------------------------
+    # Strong hot-source safeguard
+    # --------------------------------------------------------
 
+    strong_hot_source = (
+        very_bright_ratio
+        >= RED_LIGHT_STRONG_HOT_RATIO
+
+        or
+
+        white_core_ratio
+        >= RED_LIGHT_STRONG_WHITE_CORE_RATIO
+    )
+
+    return (
+        normal_glow
+        or blown_out_glow
+        or center_glow
+        or strong_hot_source
+    )
+
+
+# ============================================================
+# Octagon geometry
+# ============================================================
 
 def get_angle(p1, p2, p3):
     """Calculate the interior angle at p2."""
@@ -330,9 +425,16 @@ def score_octagon(
     angles = []
 
     for i in range(8):
-        previous_point = points[(i - 1) % 8]
+
+        previous_point = points[
+            (i - 1) % 8
+        ]
+
         current_point = points[i]
-        next_point = points[(i + 1) % 8]
+
+        next_point = points[
+            (i + 1) % 8
+        ]
 
         angles.append(
             get_angle(
@@ -343,7 +445,10 @@ def score_octagon(
         )
 
     angle_errors = [
-        abs(angle - IDEAL_OCTAGON_ANGLE)
+        abs(
+            angle
+            - IDEAL_OCTAGON_ANGLE
+        )
         for angle in angles
     ]
 
@@ -362,6 +467,7 @@ def score_octagon(
     side_lengths = []
 
     for i in range(8):
+
         p1 = np.array(
             points[i],
             dtype=np.float32
@@ -399,7 +505,11 @@ def score_octagon(
     )
 
     if mean_side > 0:
-        side_cv = side_std / mean_side
+
+        side_cv = (
+            side_std / mean_side
+        )
+
     else:
         side_cv = 1.0
 
@@ -414,17 +524,23 @@ def score_octagon(
 
     mean_angle_score = max(
         0.0,
-        1.0 - mean_angle_error / MAX_ANGLE_ERROR
+        1.0
+        - mean_angle_error
+        / MAX_ANGLE_ERROR
     )
 
     consistency_score = max(
         0.0,
-        1.0 - angle_std / 35.0
+        1.0
+        - angle_std
+        / 35.0
     )
 
     worst_angle_score = max(
         0.0,
-        1.0 - max_angle_error / 50.0
+        1.0
+        - max_angle_error
+        / 50.0
     )
 
     side_score = max(
@@ -436,7 +552,9 @@ def score_octagon(
 
     side_consistency_score = max(
         0.0,
-        1.0 - side_cv / 0.45
+        1.0
+        - side_cv
+        / 0.45
     )
 
     octagon_score = (
@@ -455,14 +573,11 @@ def find_best_octagon(
     min_side_pixels,
     max_side_length_ratio
 ):
-    """Find the strongest valid 8-vertex approximation.
+    """Find the strongest valid 8-vertex approximation."""
 
-    approxPolyDP depends heavily on epsilon. Instead of trusting one epsilon,
-    several values are tested and the best valid 8-vertex approximation is kept.
-    This helps with distance, blur, and small changes in the contour.
-    """
-
-    hull = cv2.convexHull(contour)
+    hull = cv2.convexHull(
+        contour
+    )
 
     perimeter = cv2.arcLength(
         hull,
@@ -507,6 +622,7 @@ def find_best_octagon(
     best_score = 0.0
 
     for epsilon_ratio in epsilon_ratios:
+
         approx = cv2.approxPolyDP(
             hull,
             epsilon_ratio * perimeter,
@@ -523,21 +639,28 @@ def find_best_octagon(
         )
 
         if score > best_score:
+
             best_score = score
             best_approx = approx
 
-    return best_approx, best_score
+    return (
+        best_approx,
+        best_score
+    )
 
+
+# ============================================================
+# Main stop-sign detector
+# ============================================================
 
 def detect_stop_sign(frame):
-    """Detect the strongest valid stop sign in the frame.
-
-    Candidates must survive color, size, aspect-ratio, extent, circle/glow
-    rejection, and finally the octagon geometry tests.
-    """
+    """Detect the strongest valid stop sign in the frame."""
 
     height, width = frame.shape[:2]
-    frame_area = width * height
+
+    frame_area = (
+        width * height
+    )
 
     blurred = cv2.GaussianBlur(
         frame,
@@ -569,6 +692,7 @@ def detect_stop_sign(frame):
     best_score = 0.0
 
     for contour in contours:
+
         area = cv2.contourArea(
             contour
         )
@@ -587,8 +711,10 @@ def detect_stop_sign(frame):
         ):
             continue
 
-        x, y, box_w, box_h = cv2.boundingRect(
-            contour
+        x, y, box_w, box_h = (
+            cv2.boundingRect(
+                contour
+            )
         )
 
         if box_w <= 0 or box_h <= 0:
@@ -619,8 +745,10 @@ def detect_stop_sign(frame):
         if extent < MIN_EXTENT:
             continue
 
-        _, radius = cv2.minEnclosingCircle(
-            contour
+        _, radius = (
+            cv2.minEnclosingCircle(
+                contour
+            )
         )
 
         if radius <= 0:
@@ -652,31 +780,66 @@ def detect_stop_sign(frame):
             x:x + box_w
         ]
 
-        # Reject glowing red bulbs BEFORE doing octagon fitting.
+        # ----------------------------------------------------
+        # Reject glowing red bulbs before octagon fitting
+        # ----------------------------------------------------
+
         if looks_like_red_light(
             candidate_hsv,
             candidate_red_mask
         ):
             continue
 
-        # Distant stop signs contain fewer pixels, so their polygon geometry
-        # is naturally rougher. Use slightly looser shape requirements for them.
+        # ----------------------------------------------------
+        # Far / normal object thresholds
+        # ----------------------------------------------------
+
         if area_ratio < FAR_OBJECT_AREA_RATIO:
-            min_side_pixels = FAR_MIN_SIDE_PIXELS
-            min_octagon_score = FAR_MIN_OCTAGON_SCORE
-            min_shape_match = FAR_MIN_SHAPE_MATCH
-            max_side_length_ratio = FAR_MAX_SIDE_LENGTH_RATIO
+
+            min_side_pixels = (
+                FAR_MIN_SIDE_PIXELS
+            )
+
+            min_octagon_score = (
+                FAR_MIN_OCTAGON_SCORE
+            )
+
+            min_shape_match = (
+                FAR_MIN_SHAPE_MATCH
+            )
+
+            max_side_length_ratio = (
+                FAR_MAX_SIDE_LENGTH_RATIO
+            )
 
         else:
-            min_side_pixels = NORMAL_MIN_SIDE_PIXELS
-            min_octagon_score = NORMAL_MIN_OCTAGON_SCORE
-            min_shape_match = NORMAL_MIN_SHAPE_MATCH
-            max_side_length_ratio = NORMAL_MAX_SIDE_LENGTH_RATIO
 
-        octagon, octagon_score = find_best_octagon(
-            contour,
-            min_side_pixels,
-            max_side_length_ratio
+            min_side_pixels = (
+                NORMAL_MIN_SIDE_PIXELS
+            )
+
+            min_octagon_score = (
+                NORMAL_MIN_OCTAGON_SCORE
+            )
+
+            min_shape_match = (
+                NORMAL_MIN_SHAPE_MATCH
+            )
+
+            max_side_length_ratio = (
+                NORMAL_MAX_SIDE_LENGTH_RATIO
+            )
+
+        # ----------------------------------------------------
+        # Find octagon
+        # ----------------------------------------------------
+
+        octagon, octagon_score = (
+            find_best_octagon(
+                contour,
+                min_side_pixels,
+                max_side_length_ratio
+            )
         )
 
         if octagon is None:
@@ -685,21 +848,24 @@ def detect_stop_sign(frame):
         if octagon_score < min_octagon_score:
             continue
 
-        contour_area = cv2.contourArea(
-            contour
+        contour_area = (
+            cv2.contourArea(
+                contour
+            )
         )
 
-        octagon_area = cv2.contourArea(
-            octagon
+        octagon_area = (
+            cv2.contourArea(
+                octagon
+            )
         )
 
         if contour_area <= 0:
             continue
 
-        # Measures how closely the fitted octagon covers the original red
-        # contour. Values closer to 1.0 indicate a stronger shape match.
         shape_match = (
-            octagon_area / contour_area
+            octagon_area
+            / contour_area
         )
 
         if shape_match < min_shape_match:
@@ -707,8 +873,10 @@ def detect_stop_sign(frame):
 
         square_score = max(
             0.0,
-            1.0 - abs(
-                1.0 - aspect_ratio
+            1.0
+            - abs(
+                1.0
+                - aspect_ratio
             )
         )
 
@@ -717,8 +885,6 @@ def detect_stop_sign(frame):
             extent
         )
 
-        # Geometry is intentionally the dominant part of confidence.
-        # Aspect ratio and extent provide smaller supporting contributions.
         final_score = (
             0.82 * octagon_score
             + 0.12 * square_score
@@ -734,6 +900,7 @@ def detect_stop_sign(frame):
         )
 
         if final_score > best_score:
+
             best_score = final_score
 
             (
@@ -746,34 +913,31 @@ def detect_stop_sign(frame):
             )
 
             center_x = (
-                final_x + final_w // 2
+                final_x
+                + final_w // 2
             )
 
             center_y = (
-                final_y + final_h // 2
+                final_y
+                + final_h // 2
             )
 
             best_detection = {
                 "object": "STOP_SIGN",
+
                 "box": (
                     final_x,
                     final_y,
                     final_w,
                     final_h
                 ),
+
                 "center": (
                     center_x,
                     center_y
                 ),
+
                 "confidence": final_score
             }
-
-    if best_detection is not None:
-        center_x, center_y = best_detection["center"]
-
-        print(
-            f"STOP SIGN DETECTED | "
-            f"Center: ({center_x}, {center_y})"
-        )
 
     return best_detection
