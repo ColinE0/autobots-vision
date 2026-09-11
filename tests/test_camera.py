@@ -321,3 +321,54 @@ def test_rotation_transform_is_skipped_entirely_when_the_flag_is_off():
     # Guards the lazy libcamera import: off-Pi the module is absent, so a
     # config with the flag clear must never reach the import at all.
     assert camera_mod._rotation_transform(make_cfg(CAMERA_ROTATE_180=False)) is None
+
+
+def test_fixed_exposure_pins_from_the_configuration_not_a_later_lock(monkeypatch):
+    # The FIRST frame has to be at the fixed value. Pinning it after start would
+    # leave a metered frame or two at the head of every run.
+    fake = FakePicamera2()
+    cam = CsiCamera(make_cfg(CAMERA_EXPOSURE_US=4000, CAMERA_ANALOGUE_GAIN=2.0),
+                    _picam2=fake)
+    controls = fake.video_config['controls']
+    cam.close()
+    assert controls['AeEnable'] is False
+    assert controls['ExposureTime'] == 4000
+    assert controls['AnalogueGain'] == 2.0
+    assert cam.locked['ExposureTime'] == 4000
+
+
+def test_fixed_exposure_never_meters_the_room(monkeypatch):
+    # The metered value in the fake's metadata (19999 us) must not reach the
+    # camera: a fixed exposure that re-meters is just AE with extra steps.
+    monkeypatch.setattr(camera_mod, '_LOCK_WARMUP_S', 0.0)
+    fake = FakePicamera2()
+    cam = CsiCamera(make_cfg(CAMERA_EXPOSURE_US=4000, CAMERA_LOCK_AE=True,
+                             CAMERA_LOCK_AWB=False), _picam2=fake)
+    cam.close()
+    assert all('ExposureTime' not in c for c in fake.controls_set)
+    assert cam.exposure_at_ceiling is False
+
+
+def test_relock_leaves_a_pinned_exposure_alone(monkeypatch):
+    # START re-meters the scene when AE owns exposure. With a pinned exposure
+    # that would hand the run back to the room mid-course.
+    monkeypatch.setattr(camera_mod, '_LOCK_WARMUP_S', 0.0)
+    fake = FakePicamera2()
+    cam = CsiCamera(make_cfg(CAMERA_EXPOSURE_US=4000, CAMERA_LOCK_AE=True,
+                             CAMERA_LOCK_AWB=True), _picam2=fake)
+    fake.controls_set.clear()
+    cam.relock()
+    cam.close()
+    assert all(c.get('AeEnable') is not True for c in fake.controls_set)
+
+
+def test_fixed_exposure_rejects_nonsense():
+    with pytest.raises(ValueError, match='microseconds'):
+        camera_mod._fixed_exposure_controls(make_cfg(CAMERA_EXPOSURE_US=0))
+    with pytest.raises(ValueError, match='below 1.0'):
+        camera_mod._fixed_exposure_controls(
+            make_cfg(CAMERA_EXPOSURE_US=4000, CAMERA_ANALOGUE_GAIN=0.5))
+
+
+def test_no_fixed_exposure_keeps_the_metering_path():
+    assert camera_mod._fixed_exposure_controls(make_cfg(CAMERA_EXPOSURE_US=None)) == {}

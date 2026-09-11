@@ -92,6 +92,23 @@ CAMERA_AE_CONSTRAINT = 'highlight'
 # a V 180 printed sign one stop under reads about V 90, still over SIGN_V_MIN.
 CAMERA_EV = 0.0
 
+# Fixed exposure (csi only). None meters automatically and then freezes per
+# CAMERA_LOCK_AE above. A NUMBER pins exposure and gain from the first frame and
+# never meters at all, which is the only way a lamp reads the same in a dark
+# classroom and a bright lobby: at a short fixed exposure the camera is
+# photographing an EMITTER, not a room. Reflections fall away with the ambient,
+# which also removes the lamp-merges-with-its-own-spill failure seen 2026-09-11.
+# Automatic exposure cannot do this by construction: it adapts to the room, so
+# the same lamp yields different pixel values per venue and no absolute
+# brightness gate can hold across both.
+# COST: a printed stop sign is NOT an emitter and needs ambient. One value has to
+# serve both, tuned so a sign still clears SIGN_V_MIN in the dimmest venue while
+# the lamp still clips. If no single value works, alternate exposures per frame.
+# Find it with tools/test_camera.py --exposure <us> IN THE VENUE, then set here.
+CAMERA_EXPOSURE_US = None
+CAMERA_ANALOGUE_GAIN = 1.0   # sensor gain while fixed; raise only if 1.0 is dark
+
+
 # Detection stills. The frame behind each label change is written to frames/
 # automatically: a surprising detection is worth a picture, and the moment is
 # gone by the time you decide you wanted one. On CHANGE, never every frame, so

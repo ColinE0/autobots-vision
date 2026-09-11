@@ -64,6 +64,24 @@ def _ae_controls(cfg):
             'ExposureValue': max(_EV_FLOOR, float(cfg.CAMERA_EV))}
 
 
+def _fixed_exposure_controls(cfg):
+    """Pin exposure and gain, or {} to leave metering to AE."""
+    us = getattr(cfg, 'CAMERA_EXPOSURE_US', None)
+    if us is None:
+        return {}
+    us = int(us)
+    if us <= 0:
+        raise ValueError('CAMERA_EXPOSURE_US must be a positive number of microseconds, or None')
+    gain = float(getattr(cfg, 'CAMERA_ANALOGUE_GAIN', 1.0))
+    if gain < 1.0:
+        raise ValueError('CAMERA_ANALOGUE_GAIN is a sensor gain; it cannot go below 1.0')
+    # AeEnable False from the configuration, not from a later set_controls:
+    # the first frame must already be at the fixed value, or the detector
+    # sees a metered frame or two at startup and a run is no longer one
+    # exposure end to end.
+    return {'AeEnable': False, 'ExposureTime': us, 'AnalogueGain': gain}
+
+
 class UsbCamera:
     # V4L2/OpenCV capture (the pre-2026-07-20 robot camera, kept as the spare).
     def __init__(self, cfg):
@@ -143,6 +161,8 @@ class CsiCamera:
         # red_light in tools/test_camera.py, never blue/nothing.
         controls = {'FrameRate': float(cfg.CAMERA_FPS)}
         controls.update(_ae_controls(cfg))
+        fixed = _fixed_exposure_controls(cfg)
+        controls.update(fixed)
         stream_kw = {'main': {'size': (cfg.CAMERA_WIDTH, cfg.CAMERA_HEIGHT),
                               'format': 'RGB888'},
                      'controls': controls}
@@ -177,7 +197,13 @@ class CsiCamera:
         self.locked = {}
         self.exposure_at_ceiling = False
         self._relock_at = None
-        if cfg.CAMERA_LOCK_AWB or cfg.CAMERA_LOCK_AE:
+        if fixed:
+            # Nothing to meter: report the pinned values so the run header
+            # carries them, same as a lock would.
+            self.locked = {'ExposureTime': fixed['ExposureTime'],
+                           'AnalogueGain': fixed['AnalogueGain']}
+        self.fixed_exposure = bool(fixed)
+        if cfg.CAMERA_LOCK_AWB or (cfg.CAMERA_LOCK_AE and not fixed):
             # Freeze white balance and/or exposure once they settle. AWB left
             # live lets a big red/green prop drag every hue with it mid-run.
             # AE left live is worse for detection: re-aiming the camera
@@ -204,7 +230,8 @@ class CsiCamera:
         if cfg.CAMERA_LOCK_AWB and 'ColourGains' in md:
             controls['AwbEnable'] = False
             controls['ColourGains'] = md['ColourGains']
-        if cfg.CAMERA_LOCK_AE and {'ExposureTime', 'AnalogueGain'} <= md.keys():
+        if (cfg.CAMERA_LOCK_AE and not getattr(self, 'fixed_exposure', False)
+                and {'ExposureTime', 'AnalogueGain'} <= md.keys()):
             controls['AeEnable'] = False
             controls['ExposureTime'] = md['ExposureTime']
             controls['AnalogueGain'] = md['AnalogueGain']
@@ -218,8 +245,8 @@ class CsiCamera:
             self._picam.set_controls(controls)
         # Keep the frozen values: two runs are only comparable if they
         # were taken at the same exposure, so callers can log them.
-        self.locked = {k: v for k, v in controls.items()
-                       if k not in ('AwbEnable', 'AeEnable')}
+        self.locked.update({k: v for k, v in controls.items()
+                            if k not in ('AwbEnable', 'AeEnable')})
 
     def relock(self):
         """Re-meter the scene and freeze again, without blocking the caller.
@@ -235,7 +262,10 @@ class CsiCamera:
         auto = {}
         if cfg.CAMERA_LOCK_AWB:
             auto['AwbEnable'] = True
-        if cfg.CAMERA_LOCK_AE:
+        if cfg.CAMERA_LOCK_AE and not getattr(self, 'fixed_exposure', False):
+            # A pinned exposure must survive START. Re-enabling AE here would
+            # hand the run back to the room, which is the whole thing a fixed
+            # exposure exists to prevent.
             auto['AeEnable'] = True
         if not auto:
             return

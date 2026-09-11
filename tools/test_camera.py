@@ -8,6 +8,7 @@ the lens barrel needs a twist (the Arducam IMX219 focuses by rotating it).
     python3 -m tools.test_camera          confirmed view: what the pilot acts on
     python3 -m tools.test_camera --raw    unfiltered per-frame detector output
     python3 -m tools.test_camera --no-save  do not keep stills this run
+    python3 -m tools.test_camera --exposure 4000   pin exposure, in us
 
 The default runs detections through the robot's TemporalFilter (K-of-N
 confirmation) so what prints is what the pilot would actually see. --raw
@@ -47,6 +48,10 @@ def main():
     args = sys.argv[1:]
     raw = '--raw' in args
     save = getattr(config, 'CAMERA_SAVE_FRAMES', True) and '--no-save' not in args
+    if '--exposure' in args:
+        # Venue calibration knob. Sweep it here rather than editing config.py
+        # between runs, then write the value that works into the config.
+        config.CAMERA_EXPOSURE_US = int(args[args.index('--exposure') + 1])
     frames_dir = ROOT / 'frames'
     if save:
         frames_dir.mkdir(exist_ok=True)
