@@ -134,8 +134,13 @@ def sweep(exposures, dwell, log):
                     st = stats.get(colour)
                     if st:
                         seen[colour].append(st)
-                        if st.get("fail"):
-                            fails[colour].append(st["fail"])
+                        # A blob rejected by the SHAPE gate never reaches
+                        # the glow test, so it carries "shape" rather than
+                        # "fail". Counting only the latter prints a dash and
+                        # hides the one number that says what to change.
+                        reason = st.get("fail") or st.get("shape")
+                        if reason:
+                            fails[colour].append(reason)
                 for d in det.detect(frame):
                     key = LABEL_TO_COLOUR.get(d.label)
                     if key:
