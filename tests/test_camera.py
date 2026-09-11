@@ -29,12 +29,10 @@ class FakePicamera2:
         self._first_none = first_frame_none
         self._frame_delay = frame_delay     # per-frame pacing, like a real sensor
         self._stopped = threading.Event()
-        self.encoders = []
-        self.encoder_stopped = False
 
     def create_video_configuration(self, main=None, controls=None, raw=None,
-                                   lores=None, transform=None):
-        return {'main': main, 'controls': controls, 'raw': raw, 'lores': lores,
+                                   transform=None):
+        return {'main': main, 'controls': controls, 'raw': raw,
                 'transform': transform}
 
     def configure(self, cfg):
@@ -55,12 +53,6 @@ class FakePicamera2:
         # out of frames: block like real hardware until stop()
         self._stopped.wait(timeout=5.0)
         raise RuntimeError('camera stopped')
-
-    def start_encoder(self, encoder, output=None, name=None):
-        self.encoders.append((encoder, output, name))
-
-    def stop_encoder(self):
-        self.encoder_stopped = True
 
     def capture_metadata(self):
         return dict(self.metadata)
@@ -303,54 +295,6 @@ def test_csi_first_capture_failure_raises():
         CsiCamera(make_cfg(), _picam2=FakePicamera2(first_frame_none=True))
 
 
-
-def _stub_recorder(monkeypatch):
-    """Replace the picamera2 encoder import with a marker the test can see."""
-    started = []
-    def fake(picam, cfg, path):
-        started.append(path)
-        picam.start_encoder('h264', str(path), name='lores')
-        return 'encoder'
-    monkeypatch.setattr(camera_mod, '_start_recording', fake)
-    return started
-
-
-def test_csi_recording_adds_a_lores_stream_matching_the_main_one(monkeypatch, tmp_path):
-    # picamera2 wants the second stream YUV420 and no bigger than main; the
-    # point of matching main exactly is that the file shows the detector's
-    # own view rather than a prettier one.
-    started = _stub_recorder(monkeypatch)
-    fake = FakePicamera2()
-    cam = CsiCamera(make_cfg(CAMERA_RECORD=True, CAMERA_RECORD_DIR=str(tmp_path)),
-                    _picam2=fake)
-    lores = fake.video_config['lores']
-    cam.close()
-    assert lores == {'size': (320, 240), 'format': 'YUV420'}
-    assert fake.encoders and fake.encoders[0][2] == 'lores'
-    assert started == [cam.recording_path]
-    assert cam.recording_path.parent == tmp_path
-    assert cam.recording_path.suffix == '.h264'
-
-
-def test_csi_without_recording_configures_no_second_stream():
-    fake = FakePicamera2()
-    cam = CsiCamera(make_cfg(CAMERA_RECORD=False), _picam2=fake)
-    cam.close()
-    assert fake.video_config['lores'] is None
-    assert fake.encoders == []
-    assert cam.recording_path is None
-
-
-def test_csi_close_stops_the_encoder_before_the_camera(monkeypatch, tmp_path):
-    # The file is only complete once the encoder flushes, so close() has to
-    # stop it rather than leaving it to the camera going away.
-    _stub_recorder(monkeypatch)
-    fake = FakePicamera2()
-    cam = CsiCamera(make_cfg(CAMERA_RECORD=True, CAMERA_RECORD_DIR=str(tmp_path)),
-                    _picam2=fake)
-    cam.close()
-    assert fake.encoder_stopped
-    assert fake.closed
 
 def test_csi_rotates_on_the_isp_when_the_mount_is_upside_down(monkeypatch):
     # The chassis mount inverts the camera. Correcting it in the stream

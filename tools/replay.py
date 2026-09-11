@@ -1,12 +1,12 @@
 """
 Replay a recorded run through the detector, off the robot.
 
-    python -m tools.replay recordings/run.mp4
-    python -m tools.replay recordings/run.mp4 --raw
-    python -m tools.replay recordings/run.mp4 --frames 1180 1240
+    python -m tools.replay run.mp4
+    python -m tools.replay run.mp4 --raw
+    python -m tools.replay run.mp4 --frames 1180 1240
 
-A run recorded by tools/test_camera.py --record is the detector's own view,
-frame for frame, so replaying it here answers what a log line cannot: whether
+Takes any clip the Pi can produce, e.g. rpicam-vid -t 30000 -o run.h264 then
+ffmpeg -r 30 -i run.h264 -c copy run.mp4. Answers what a log line cannot: whether
 a 0.5% blob was the prop, a reflection, or a lamp the gates nearly rejected,
 and whether a confirmed label FLAPPED rather than holding.
 

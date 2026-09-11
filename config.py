@@ -92,23 +92,15 @@ CAMERA_AE_CONSTRAINT = 'highlight'
 # a V 180 printed sign one stop under reads about V 90, still over SIGN_V_MIN.
 CAMERA_EV = 0.0
 
-# Run recording (csi only). Records what the DETECTOR sees, through the Pi's
-# hardware H.264 encoder on a second stream, so the ARM cores never touch the
-# pixels and the frame rate barely moves. The recording stream is deliberately
-# the same size as the main stream: a run is worth keeping because it shows
-# what the detector was handed, not because it is pretty. Off by default;
-# tools/test_camera.py --record turns it on for one run.
-# The camera is mounted upside down on the chassis, confirmed 2026-09-11 from a
-# saved frame: the scene arrives rotated 180. Corrected on the ISP, which is
-# free, rather than with a cv2.flip on every frame, which is not. It must be
-# BOTH axes. A vertical flip alone mirrors left and right, and
-# DETECT_IGNORE_BOTTOM_FRAC and the detector's centring gates would then be
-# quietly wrong instead of loudly wrong. Set False if the camera is remounted.
-CAMERA_ROTATE_180 = True
-
-CAMERA_RECORD = False
-CAMERA_RECORD_BITRATE = 1_500_000   # ~0.2 MB/s at 320x240, ~11 MB a minute
-CAMERA_RECORD_DIR = 'recordings'    # gitignored; files are raw .h264
+# Detection stills. The frame behind each label change is written to frames/
+# automatically: a surprising detection is worth a picture, and the moment is
+# gone by the time you decide you wanted one. On CHANGE, never every frame, so
+# a quiet run costs nothing. --no-save turns it off for one run.
+CAMERA_SAVE_FRAMES = True
+# Per-run ceiling. A run flapping at a threshold writes hundreds, and frames/
+# is never cleared on its own: an unattended session left weeks of stills
+# behind once. Saving stops at this count and says so once.
+CAMERA_SAVE_MAX_FRAMES = 200
 
 # Detector backend, picked by vision.detector.make_detector():
 #   'classical'  HSV masks + contour gates + white-content stop/lamp split

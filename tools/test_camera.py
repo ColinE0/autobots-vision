@@ -7,8 +7,7 @@ the lens barrel needs a twist (the Arducam IMX219 focuses by rotating it).
 
     python3 -m tools.test_camera          confirmed view: what the pilot acts on
     python3 -m tools.test_camera --raw    unfiltered per-frame detector output
-    python3 -m tools.test_camera --save   also keep the frame on every change
-    python3 -m tools.test_camera --record record the whole run to recordings/
+    python3 -m tools.test_camera --no-save  do not keep stills this run
 
 The default runs detections through the robot's TemporalFilter (K-of-N
 confirmation) so what prints is what the pilot would actually see. --raw
@@ -22,17 +21,12 @@ reported separately every 2 s. Lines are timestamped and appended to
 test_camera.log, whose session header carries the git revision, both
 backends, resolution, view mode and the locked exposure.
 
---save writes the frame behind each label change to frames/ (gitignored) as
-a PNG named by time, frame id and labels, so a surprising detection can be
-re-run through the detector on a laptop instead of argued about from a log
-line. Works in both views.
-
---record (csi only) records the whole run instead of single frames, through
-the Pi's hardware H.264 encoder, so it costs the cores almost nothing. The
-file is raw .h264 in recordings/ at the detector's own resolution: it shows
-what the detector was handed, not what the lens saw. Convert it with ffmpeg,
-e.g. ffmpeg -r 30 -i run-....h264 -c copy run.mp4. Compare the FPS line with
-and without it before trusting a run recorded this way.
+Stills are kept AUTOMATICALLY: the frame behind each label change is written
+to frames/ (gitignored) as a PNG named by time, frame id and labels, so a
+surprising detection can be re-run through the detector on a laptop instead of
+argued about from a log line. On change only, never every frame. Works in both
+views. --no-save turns it off, and CAMERA_SAVE_MAX_FRAMES caps one run so an
+unattended session cannot fill the card.
 """
 import sys, time, pathlib
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -52,19 +46,10 @@ LABELS = ('stop_sign', 'red_light', 'yellow_light', 'green_light')
 def main():
     args = sys.argv[1:]
     raw = '--raw' in args
-    save = '--save' in args
-    record = '--record' in args
+    save = getattr(config, 'CAMERA_SAVE_FRAMES', True) and '--no-save' not in args
     frames_dir = ROOT / 'frames'
     if save:
         frames_dir.mkdir(exist_ok=True)
-    if record and config.CAMERA_BACKEND != 'csi':
-        # The encoder is a Pi block; the webcam path has nothing to hand it.
-        print(f"[test_camera] --record needs CAMERA_BACKEND='csi', "
-              f"not {config.CAMERA_BACKEND!r}. Recording off for this run.")
-        record = False
-    if record:
-        config.CAMERA_RECORD = True
-        config.CAMERA_RECORD_DIR = ROOT / config.CAMERA_RECORD_DIR
     cam = make_camera(config)
     det = make_detector(config)
     filt = None if raw else TemporalFilter(config)
@@ -91,13 +76,13 @@ def main():
                      f"{config.CAMERA_WIDTH}x{config.CAMERA_HEIGHT}@{config.CAMERA_FPS} "
                      f"sensor={sensor_note} "
                      f"view={view} meter=[{meter_note}] exposure=[{lock_note}] "
-                     f"save={save} record={getattr(cam, 'recording_path', None) or False}")
+                     f"save={save}")
     print(f"camera={config.CAMERA_BACKEND}  detector={config.DETECTOR_BACKEND}  "
           f"view={view}. Ctrl+C to quit. Logging to {log.path}"
           + (f", frames to {frames_dir}" if save else '')
-          + (f", recording to {cam.recording_path}" if record else '')
           + "\n")
     last_id, n, t0 = -1, 0, time.monotonic()
+    saved, cap = 0, int(getattr(config, 'CAMERA_SAVE_MAX_FRAMES', 200))
     last_key = None
     try:
         while True:
@@ -121,10 +106,16 @@ def main():
                 labels = ', '.join(
                     f"{lbl}({frac*100:.1f}%)" for lbl, frac in shown) or '-'
                 print(log.line(labels, echo=False), flush=True)
-                if save:
+                if save and saved < cap:
                     name = (f"{time.strftime('%Y%m%d-%H%M%S')}_{fid}_"
                             f"{'+'.join(key) or 'none'}.png")
                     cv2.imwrite(str(frames_dir / name), frame)
+                    saved += 1
+                    if saved == cap:
+                        # Said once, not per frame: a run flapping at a
+                        # threshold would otherwise bury its own detections.
+                        print(log.line(f'still cap {cap} reached, no more saved'),
+                              flush=True)
                 last_key = key
             dt = time.monotonic() - t0
             if dt >= 2.0:
