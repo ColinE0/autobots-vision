@@ -3,75 +3,88 @@ import numpy as np
 import time
 
 
-# Detection region
-TOP_CUTOFF = 0.00
+# ============================================================
+# Region of Interest
+# ============================================================
+
+# Only analyze the upper portion of the frame where traffic lights
+# are expected to appear.
+TOP_CUTOFF = 0.0
 BOTTOM_CUTOFF = 0.75
 
 
-# Basic candidate requirements
+# ============================================================
+# General Candidate Requirements
+# ============================================================
+
 MIN_SATURATION = 110
 MIN_VALUE = 170
 
 MIN_AREA_RATIO = 0.00008
 MAX_AREA_RATIO = 0.05
 
+# Minimum percentage of the candidate ROI that must belong
+# to the winning traffic-light color.
 MIN_COLOR_RATIO = 0.08
+
+# Winning color must contain at least this many times as many
+# pixels as the second strongest color.
 WINNER_RATIO = 1.20
 
+# Prevent unnecessary repeated full analysis of the same detection.
 HOLD_TIME = 0.25
 
 
-# Red light candidate + brightness requirements
-# Distant red LEDs lose apparent saturation/brightness and shrink to only a
-# handful of pixels, so red gets a looser first-pass gate than nearby lights.
+# ============================================================
+# Red-Light Thresholds
+# ============================================================
+
 RED_CANDIDATE_MIN_SATURATION = 75
 RED_CANDIDATE_MIN_VALUE = 130
 
-RED_MIN_MEAN_VALUE = 180
-RED_MIN_PEAK_VALUE = 220
-RED_MIN_BRIGHT_RATIO = 0.18
-RED_BRIGHT_PIXEL_VALUE = 195
+RED_MIN_MEAN_VALUE = 150
+RED_MIN_PEAK_VALUE = 180
+RED_MIN_BRIGHT_RATIO = 0.40
+RED_BRIGHT_PIXEL_VALUE = 155
 
 
-# Yellow light brightness requirements
-YELLOW_MIN_MEAN_VALUE = 175
-YELLOW_MIN_PEAK_VALUE = 220
-YELLOW_MIN_BRIGHT_RATIO = 0.2
-YELLOW_BRIGHT_PIXEL_VALUE = 205
+# ============================================================
+# Yellow-Light Thresholds
+# ============================================================
 
-# Yellow gets its own looser saturation gate because a real LED often
-# washes toward white in the center.
 YELLOW_CANDIDATE_MIN_SATURATION = 65
 YELLOW_CANDIDATE_MIN_VALUE = 150
 
-# Real yellow LEDs can wash toward white in the center.
-# Treat a very bright, low-saturation region touching yellow as
-# part of the yellow bulb, but require enough of it to reject
-# ordinary solid-yellow objects.
+YELLOW_MIN_MEAN_VALUE = 175
+YELLOW_MIN_PEAK_VALUE = 220
+YELLOW_MIN_BRIGHT_RATIO = 0.20
+YELLOW_BRIGHT_PIXEL_VALUE = 205
+
+# Yellow LEDs can contain a white, overexposed center.
 YELLOW_WHITE_MIN_VALUE = 230
 YELLOW_WHITE_MAX_SATURATION = 90
 YELLOW_MIN_WHITE_CORE_RATIO = 0.04
 
-# Hard glow requirements. These reject solid/shiny yellow objects that only
-# have a tiny reflection instead of behaving like an illuminated LED.
 YELLOW_MIN_HOT_RATIO = 0.25
 YELLOW_MIN_SUPERHOT_RATIO = 0.04
-
-# Extra glow metrics used to make a real illuminated bulb outrank
-# small yellow buttons / glossy reflections. These do not hard-reject
-# the LED; they mainly affect which valid yellow candidate wins.
 YELLOW_HOT_PIXEL_VALUE = 235
 YELLOW_SUPERHOT_PIXEL_VALUE = 248
 
 
-# Green light brightness requirements
+# ============================================================
+# Green-Light Thresholds
+# ============================================================
+
 GREEN_MIN_MEAN_VALUE = 185
-GREEN_MIN_PEAK_VALUE = 220
+GREEN_MIN_PEAK_VALUE = 215
 GREEN_MIN_BRIGHT_RATIO = 0.25
 GREEN_BRIGHT_PIXEL_VALUE = 205
 
 
-# Final bulb-box requirements
+# ============================================================
+# Final Bulb-Box Requirements
+# ============================================================
+
 FINAL_MIN_SATURATION = 130
 FINAL_MIN_VALUE = 185
 
@@ -82,52 +95,77 @@ FINAL_BOX_PADDING = 0.10
 YELLOW_BOX_PADDING = 0.18
 
 
-# HSV color ranges
+# ============================================================
+# HSV Color Ranges
+# ============================================================
+
+# Red wraps around the HSV hue scale, so two ranges are required.
 RED1_LOWER = np.array([0, 100, 100])
-RED1_UPPER = np.array([12, 255, 255])
+RED1_UPPER = np.array([8, 255, 255])
 
 RED2_LOWER = np.array([168, 100, 100])
 RED2_UPPER = np.array([180, 255, 255])
 
-YELLOW_LOWER = np.array([15, 90, 100])
+YELLOW_LOWER = np.array([9, 90, 100])
 YELLOW_UPPER = np.array([40, 255, 255])
 
 GREEN_LOWER = np.array([40, 80, 80])
 GREEN_UPPER = np.array([95, 255, 255])
 
 
-# Mask-cleaning kernels
+# ============================================================
+# Morphology Kernels
+# ============================================================
+
 OPEN_KERNEL = np.ones((3, 3), np.uint8)
 CLOSE_KERNEL = np.ones((5, 5), np.uint8)
+
 YELLOW_DILATE_KERNEL = np.ones((5, 5), np.uint8)
 YELLOW_WHITE_NEIGHBOR_KERNEL = np.ones((7, 7), np.uint8)
 
 
-# Previous detection used to reduce flickering
+# ============================================================
+# Detection Hold State
+# ============================================================
+
 last_detection = None
 last_analysis_time = 0.0
 
 
-def get_roi_mask(frame):
-    """Create the allowed traffic-light detection region."""
+# ============================================================
+# Region of Interest
+# ============================================================
 
-    h, w = frame.shape[:2]
+def get_roi_mask(frame):
+    """
+    Create a mask limiting traffic-light detection to the allowed
+    vertical portion of the image.
+    """
+
+    height, width = frame.shape[:2]
 
     mask = np.zeros(
-        (h, w),
+        (height, width),
         dtype=np.uint8
     )
 
-    ymin = int(h * TOP_CUTOFF)
-    ymax = int(h * BOTTOM_CUTOFF)
+    ymin = int(height * TOP_CUTOFF)
+    ymax = int(height * BOTTOM_CUTOFF)
 
     mask[ymin:ymax, :] = 255
 
     return mask
 
 
+# ============================================================
+# Mask Cleanup
+# ============================================================
+
 def clean_mask(mask):
-    """Remove small noise and reconnect nearby regions."""
+    """
+    Remove isolated noise and reconnect nearby pixels belonging
+    to the same object.
+    """
 
     mask = cv2.morphologyEx(
         mask,
@@ -144,8 +182,12 @@ def clean_mask(mask):
     return mask
 
 
+# ============================================================
+# HSV Color Masks
+# ============================================================
+
 def get_color_masks(hsv):
-    """Create separate red, yellow, and green masks."""
+    """Return binary masks for red, yellow, and green pixels."""
 
     red1 = cv2.inRange(
         hsv,
@@ -180,7 +222,7 @@ def get_color_masks(hsv):
 
 
 def get_single_color_mask(hsv, color):
-    """Return the mask for one traffic-light color."""
+    """Return the HSV mask corresponding to one requested color."""
 
     red, yellow, green = get_color_masks(hsv)
 
@@ -199,13 +241,30 @@ def get_single_color_mask(hsv, color):
     )
 
 
+# ============================================================
+# Yellow White-Core Handling
+# ============================================================
+
 def get_yellow_with_white_core(hsv, yellow_mask):
-    """Add white-hot pixels that are directly connected to yellow."""
+    """
+    Include white-hot pixels located next to yellow pixels.
+
+    Bright yellow LEDs may become partially white in the camera
+    because of overexposure.
+    """
 
     white_core = cv2.inRange(
         hsv,
-        np.array([0, 0, YELLOW_WHITE_MIN_VALUE]),
-        np.array([180, YELLOW_WHITE_MAX_SATURATION, 255])
+        np.array([
+            0,
+            0,
+            YELLOW_WHITE_MIN_VALUE
+        ]),
+        np.array([
+            180,
+            YELLOW_WHITE_MAX_SATURATION,
+            255
+        ])
     )
 
     yellow_neighborhood = cv2.dilate(
@@ -227,11 +286,19 @@ def get_yellow_with_white_core(hsv, yellow_mask):
     return yellow_with_core, white_near_yellow
 
 
-def find_bright_candidates(frame):
-    """Find bright colored regions that could be traffic lights."""
+# ============================================================
+# Candidate Detection
+# ============================================================
 
-    h, w = frame.shape[:2]
-    frame_area = w * h
+def find_bright_candidates(frame):
+    """
+    Find bright red, yellow, or green regions that could represent
+    traffic-light bulbs.
+    """
+
+    height, width = frame.shape[:2]
+
+    frame_area = width * height
 
     blurred = cv2.GaussianBlur(
         frame,
@@ -244,52 +311,108 @@ def find_bright_candidates(frame):
         cv2.COLOR_BGR2HSV
     )
 
+    # General bright and saturated mask.
     intense_mask = cv2.inRange(
         hsv,
-        np.array([0, MIN_SATURATION, MIN_VALUE]),
-        np.array([180, 255, 255])
+        np.array([
+            0,
+            MIN_SATURATION,
+            MIN_VALUE
+        ]),
+        np.array([
+            180,
+            255,
+            255
+        ])
     )
 
     red, yellow, green = get_color_masks(hsv)
 
-    yellow_with_core, _ = get_yellow_with_white_core(
+    # --------------------------------------------------------
+    # Red candidate mask
+    # --------------------------------------------------------
+
+    red_gate = cv2.inRange(
+        hsv,
+        np.array([
+            0,
+            RED_CANDIDATE_MIN_SATURATION,
+            RED_CANDIDATE_MIN_VALUE
+        ]),
+        np.array([
+            180,
+            255,
+            255
+        ])
+    )
+
+    red_candidate = cv2.bitwise_and(
+        red,
+        red_gate
+    )
+
+    # --------------------------------------------------------
+    # Green candidate mask
+    # --------------------------------------------------------
+
+    green_candidate = cv2.bitwise_and(
+        green,
+        intense_mask
+    )
+
+    # --------------------------------------------------------
+    # Yellow candidate mask
+    # --------------------------------------------------------
+
+    yellow_gate = cv2.inRange(
+        hsv,
+        np.array([
+            0,
+            YELLOW_CANDIDATE_MIN_SATURATION,
+            YELLOW_CANDIDATE_MIN_VALUE
+        ]),
+        np.array([
+            180,
+            255,
+            255
+        ])
+    )
+
+    yellow_candidate = cv2.bitwise_and(
+        yellow,
+        yellow_gate
+    )
+
+    _, yellow_white_core = get_yellow_with_white_core(
         hsv,
         yellow
     )
 
-    # Red gets its own looser first-pass gate so a small/distant red LED is not
-    # deleted before the more detailed brightness validation below.
-    red_gate = cv2.inRange(
-        hsv,
-        np.array([0, RED_CANDIDATE_MIN_SATURATION, RED_CANDIDATE_MIN_VALUE]),
-        np.array([180, 255, 255])
+    yellow_candidate = cv2.bitwise_or(
+        yellow_candidate,
+        yellow_white_core
     )
-    red_candidate = cv2.bitwise_and(red, red_gate)
 
-    # Green keeps the normal strong saturation+brightness requirement.
-    green_candidate = cv2.bitwise_and(green, intense_mask)
-
-    # Yellow needs a separate gate. A glowing yellow LED can become pale/white
-    # in the center, so demanding the global saturation threshold can erase it.
-    yellow_gate = cv2.inRange(
-        hsv,
-        np.array([0, YELLOW_CANDIDATE_MIN_SATURATION, YELLOW_CANDIDATE_MIN_VALUE]),
-        np.array([180, 255, 255])
+    # Combine all possible traffic-light candidates.
+    candidate_mask = cv2.bitwise_or(
+        red_candidate,
+        yellow_candidate
     )
-    yellow_candidate = cv2.bitwise_and(yellow, yellow_gate)
 
-    _, yellow_white_core = get_yellow_with_white_core(hsv, yellow)
-    yellow_candidate = cv2.bitwise_or(yellow_candidate, yellow_white_core)
+    candidate_mask = cv2.bitwise_or(
+        candidate_mask,
+        green_candidate
+    )
 
-    candidate_mask = cv2.bitwise_or(red_candidate, yellow_candidate)
-    candidate_mask = cv2.bitwise_or(candidate_mask, green_candidate)
-
+    # Apply vertical ROI.
     candidate_mask = cv2.bitwise_and(
         candidate_mask,
         get_roi_mask(frame)
     )
 
-    candidate_mask = clean_mask(candidate_mask)
+    candidate_mask = clean_mask(
+        candidate_mask
+    )
 
     contours, _ = cv2.findContours(
         candidate_mask,
@@ -300,12 +423,17 @@ def find_bright_candidates(frame):
     candidates = []
 
     for contour in contours:
-        area = cv2.contourArea(contour)
+
+        area = cv2.contourArea(
+            contour
+        )
 
         if area <= 0:
             continue
 
-        area_ratio = area / frame_area
+        area_ratio = (
+            area / frame_area
+        )
 
         if not (
             MIN_AREA_RATIO
@@ -314,39 +442,60 @@ def find_bright_candidates(frame):
         ):
             continue
 
-        x, y, box_w, box_h = cv2.boundingRect(contour)
+        x, y, box_width, box_height = (
+            cv2.boundingRect(
+                contour
+            )
+        )
 
-        if box_w <= 0 or box_h <= 0:
+        if box_width <= 0 or box_height <= 0:
             continue
 
         candidates.append(
-            (x, y, box_w, box_h)
+            (
+                x,
+                y,
+                box_width,
+                box_height
+            )
         )
 
     return candidates
 
 
-def validate_light_color(hsv, color_mask, color):
-    """Return True when the colored region behaves like an illuminated bulb."""
+# ============================================================
+# Brightness Validation
+# ============================================================
 
-    values = hsv[:, :, 2][color_mask > 0]
+def validate_light_color(hsv, color_mask, color):
+    """
+    Verify that the selected color is bright enough to represent
+    an illuminated traffic light.
+    """
+
+    values = hsv[:, :, 2][
+        color_mask > 0
+    ]
 
     if values.size == 0:
         return False
 
     if color == "RED":
+
         min_mean = RED_MIN_MEAN_VALUE
         min_peak = RED_MIN_PEAK_VALUE
         min_bright_ratio = RED_MIN_BRIGHT_RATIO
         bright_pixel_value = RED_BRIGHT_PIXEL_VALUE
 
     elif color == "YELLOW":
+
         min_mean = YELLOW_MIN_MEAN_VALUE
         min_peak = YELLOW_MIN_PEAK_VALUE
         min_bright_ratio = YELLOW_MIN_BRIGHT_RATIO
         bright_pixel_value = YELLOW_BRIGHT_PIXEL_VALUE
 
     elif color == "GREEN":
+
         min_mean = GREEN_MIN_MEAN_VALUE
         min_peak = GREEN_MIN_PEAK_VALUE
         min_bright_ratio = GREEN_MIN_BRIGHT_RATIO
@@ -355,10 +504,21 @@ def validate_light_color(hsv, color_mask, color):
     else:
         return False
 
-    mean_value = float(np.mean(values))
-    peak_value = float(np.percentile(values, 90))
+    mean_value = float(
+        np.mean(values)
+    )
+
+    peak_value = float(
+        np.percentile(
+            values,
+            90
+        )
+    )
+
     bright_ratio = float(
-        np.mean(values >= bright_pixel_value)
+        np.mean(
+            values >= bright_pixel_value
+        )
     )
 
     return (
@@ -368,14 +528,21 @@ def validate_light_color(hsv, color_mask, color):
     )
 
 
-def get_precise_bulb_box(frame, original_box, color):
-    """Refine the rough candidate box around the illuminated bulb."""
+# ============================================================
+# Precise Bulb Bounding Box
+# ============================================================
 
-    x, y, box_w, box_h = original_box
+def get_precise_bulb_box(frame, original_box, color):
+    """
+    Refine a candidate bounding box so that it surrounds the
+    illuminated bulb rather than the entire candidate region.
+    """
+
+    x, y, box_width, box_height = original_box
 
     roi = frame[
-        y:y + box_h,
-        x:x + box_w
+        y:y + box_height,
+        x:x + box_width
     ]
 
     if roi is None or roi.size == 0:
@@ -392,11 +559,24 @@ def get_precise_bulb_box(frame, original_box, color):
     )
 
     if color == "YELLOW":
-        min_saturation = YELLOW_FINAL_MIN_SATURATION
-        min_value = YELLOW_FINAL_MIN_VALUE
+
+        min_saturation = (
+            YELLOW_FINAL_MIN_SATURATION
+        )
+
+        min_value = (
+            YELLOW_FINAL_MIN_VALUE
+        )
+
     else:
-        min_saturation = FINAL_MIN_SATURATION
-        min_value = FINAL_MIN_VALUE
+
+        min_saturation = (
+            FINAL_MIN_SATURATION
+        )
+
+        min_value = (
+            FINAL_MIN_VALUE
+        )
 
     strong_mask = cv2.inRange(
         hsv,
@@ -417,22 +597,28 @@ def get_precise_bulb_box(frame, original_box, color):
         strong_mask
     )
 
+    # Color-specific cleanup.
     if color == "YELLOW":
+
         final_mask = cv2.dilate(
             final_mask,
             YELLOW_DILATE_KERNEL,
             iterations=1
         )
 
-    if color == "RED":
-        # Preserve small distant red-light regions.
+    elif color == "RED":
+
         final_mask = cv2.morphologyEx(
             final_mask,
             cv2.MORPH_CLOSE,
             CLOSE_KERNEL
         )
+
     else:
-        final_mask = clean_mask(final_mask)
+
+        final_mask = clean_mask(
+            final_mask
+        )
 
     contours, _ = cv2.findContours(
         final_mask,
@@ -447,7 +633,10 @@ def get_precise_bulb_box(frame, original_box, color):
     best_score = 0.0
 
     for contour in contours:
-        area = cv2.contourArea(contour)
+
+        area = cv2.contourArea(
+            contour
+        )
 
         if area <= 0:
             continue
@@ -479,19 +668,28 @@ def get_precise_bulb_box(frame, original_box, color):
         ):
             continue
 
-        mean_v = float(np.mean(values_v))
-        mean_s = float(np.mean(values_s))
+        mean_v = float(
+            np.mean(values_v)
+        )
 
+        mean_s = float(
+            np.mean(values_s)
+        )
+
+        # Favor regions that are larger, brighter, and more saturated.
         score = (
             area
             * mean_v
             * (
                 0.5
-                + 0.5 * mean_s / 255.0
+                + 0.5
+                * mean_s
+                / 255.0
             )
         )
 
         if score > best_score:
+
             best_score = score
             best_contour = contour
 
@@ -504,22 +702,35 @@ def get_precise_bulb_box(frame, original_box, color):
 
     if color == "YELLOW":
         padding = YELLOW_BOX_PADDING
+
     else:
         padding = FINAL_BOX_PADDING
 
-    pad_x = int(bw * padding)
-    pad_y = int(bh * padding)
+    pad_x = int(
+        bw * padding
+    )
 
-    new_x1 = max(0, bx - pad_x)
-    new_y1 = max(0, by - pad_y)
+    pad_y = int(
+        bh * padding
+    )
+
+    new_x1 = max(
+        0,
+        bx - pad_x
+    )
+
+    new_y1 = max(
+        0,
+        by - pad_y
+    )
 
     new_x2 = min(
-        box_w,
+        box_width,
         bx + bw + pad_x
     )
 
     new_y2 = min(
-        box_h,
+        box_height,
         by + bh + pad_y
     )
 
@@ -531,14 +742,26 @@ def get_precise_bulb_box(frame, original_box, color):
     )
 
 
-def analyze_candidate_roi(frame, box):
-    """Classify a candidate as red, yellow, or green."""
+# ============================================================
+# Candidate Analysis
+# ============================================================
 
-    x, y, box_w, box_h = box
+def analyze_candidate_roi(frame, box):
+    """
+    Analyze one candidate region.
+
+    Processing order:
+    1. Determine the dominant traffic-light color.
+    2. Lock that color.
+    3. Validate its brightness.
+    4. Refine the bulb bounding box.
+    """
+
+    x, y, box_width, box_height = box
 
     roi = frame[
-        y:y + box_h,
-        x:x + box_w
+        y:y + box_height,
+        x:x + box_width
     ]
 
     if roi is None or roi.size == 0:
@@ -549,166 +772,120 @@ def analyze_candidate_roi(frame, box):
         cv2.COLOR_BGR2HSV
     )
 
-    intense_mask = cv2.inRange(
-        hsv,
-        np.array([0, MIN_SATURATION, MIN_VALUE]),
-        np.array([180, 255, 255])
-    )
-
-    red, yellow, green = get_color_masks(hsv)
-
-    yellow_with_core, yellow_white_core = (
-        get_yellow_with_white_core(
-            hsv,
-            yellow
-        )
-    )
-
-    yellow_gate = cv2.inRange(
-        hsv,
-        np.array([0, YELLOW_CANDIDATE_MIN_SATURATION, YELLOW_CANDIDATE_MIN_VALUE]),
-        np.array([180, 255, 255])
-    )
-    yellow_bright = cv2.bitwise_and(yellow, yellow_gate)
-    yellow_glow_mask = cv2.bitwise_or(yellow_bright, yellow_white_core)
-
-    red_gate = cv2.inRange(
-        hsv,
-        np.array([0, RED_CANDIDATE_MIN_SATURATION, RED_CANDIDATE_MIN_VALUE]),
-        np.array([180, 255, 255])
+    red_mask, yellow_mask, green_mask = (
+        get_color_masks(hsv)
     )
 
     masks = {
-        "RED": cv2.bitwise_and(red, red_gate),
-        "YELLOW": yellow_glow_mask,
-        "GREEN": cv2.bitwise_and(green, intense_mask)
+        "RED": red_mask,
+        "YELLOW": yellow_mask,
+        "GREEN": green_mask
     }
 
-    powers = {}
-    counts = {}
+    counts = {
+        color: cv2.countNonZero(mask)
+        for color, mask in masks.items()
+    }
 
-    for color, mask in masks.items():
-        counts[color] = cv2.countNonZero(mask)
-        values = hsv[:, :, 2][mask > 0]
+    roi_area = max(
+        box_width * box_height,
+        1
+    )
 
-        if values.size == 0:
-            powers[color] = 0.0
-            continue
-
-        threshold = np.percentile(values, 85)
-        strongest = values[values >= threshold]
-
-        # Do NOT multiply by pixel count: that made a large yellow object
-        # beat a small glowing bulb just because it occupied more area.
-        mean_strong = float(np.mean(strongest))
-        peak = float(np.percentile(values, 95))
-        powers[color] = 0.65 * mean_strong + 0.35 * peak
-
-        if color == "YELLOW":
-            # A real illuminated bulb normally has a *region* of very bright
-            # pixels, not just one shiny specular dot. Give that glow a strong
-            # preference so a small yellow button cannot beat the lamp.
-            roi_area_safe = max(box_w * box_h, 1)
-            core_ratio = cv2.countNonZero(yellow_white_core) / roi_area_safe
-
-            yellow_values = hsv[:, :, 2][yellow_glow_mask > 0]
-            if yellow_values.size > 0:
-                hot_ratio = float(np.mean(yellow_values >= YELLOW_HOT_PIXEL_VALUE))
-                superhot_ratio = float(np.mean(yellow_values >= YELLOW_SUPERHOT_PIXEL_VALUE))
-            else:
-                hot_ratio = 0.0
-                superhot_ratio = 0.0
-
-            # Strongly reward a broad glowing region. A button can have one
-            # bright reflection, but the lit bulb should have many hot pixels.
-            powers[color] += (90.0 * core_ratio)
-            powers[color] += (45.0 * hot_ratio)
-            powers[color] += (35.0 * superhot_ratio)
+    # --------------------------------------------------------
+    # Stage 1: Color classification
+    # --------------------------------------------------------
 
     sorted_colors = sorted(
-        powers.items(),
+        counts.items(),
         key=lambda item: item[1],
         reverse=True
     )
 
     winner_color = sorted_colors[0][0]
-    winner_power = sorted_colors[0][1]
-    second_power = sorted_colors[1][1]
+    winner_count = sorted_colors[0][1]
 
-    if winner_power <= 0:
+    second_count = sorted_colors[1][1]
+
+    if winner_count <= 0:
         return None
 
-    roi_area = box_w * box_h
-    winner_ratio = counts[winner_color] / roi_area
+    winner_ratio = (
+        winner_count / roi_area
+    )
 
+    # Candidate must contain enough pixels of the winning color.
     if winner_ratio < MIN_COLOR_RATIO:
         return None
 
+    # Winning color must clearly beat the second strongest color.
     if (
-        second_power > 0
-        and winner_power < second_power * WINNER_RATIO
+        second_count > 0
+        and winner_count
+        < second_count * WINNER_RATIO
     ):
         return None
 
-    if winner_color == "YELLOW":
-        white_core_ratio = (
-            cv2.countNonZero(yellow_white_core)
-            / roi_area
-        )
+    # Once selected here, brightness is not allowed to change color.
+    winner_mask = masks[
+        winner_color
+    ]
 
-        if white_core_ratio < YELLOW_MIN_WHITE_CORE_RATIO:
-            return None
-
-        # Do not merely *reward* yellow glow during ranking -- require it.
-        # A plastic yellow button can contain one bright reflection, but a lit
-        # LED should have a meaningful region of hot and super-hot pixels.
-        yellow_values = hsv[:, :, 2][masks["YELLOW"] > 0]
-
-        if yellow_values.size == 0:
-            return None
-
-        hot_ratio = float(
-            np.mean(yellow_values >= YELLOW_HOT_PIXEL_VALUE)
-        )
-        superhot_ratio = float(
-            np.mean(yellow_values >= YELLOW_SUPERHOT_PIXEL_VALUE)
-        )
-
-        if hot_ratio < YELLOW_MIN_HOT_RATIO:
-            return None
-
-        if superhot_ratio < YELLOW_MIN_SUPERHOT_RATIO:
-            return None
+    # --------------------------------------------------------
+    # Stage 2: Brightness validation
+    # --------------------------------------------------------
 
     if not validate_light_color(
         hsv,
-        masks[winner_color],
+        winner_mask,
         winner_color
     ):
         return None
 
-    # Save an explicit glow score for final candidate selection.
-    # This is important for when a yellow button and the real bulb
-    # are both technically valid in the same frame.
+    # --------------------------------------------------------
+    # Detection strength
+    # --------------------------------------------------------
+
+    values = hsv[:, :, 2][
+        winner_mask > 0
+    ]
+
+    if values.size > 0:
+
+        strong_threshold = np.percentile(
+            values,
+            85
+        )
+
+        strongest = values[
+            values >= strong_threshold
+        ]
+
+        mean_strong = float(
+            np.mean(strongest)
+        )
+
+        peak = float(
+            np.percentile(
+                values,
+                95
+            )
+        )
+
+        winner_power = (
+            0.65 * mean_strong
+            + 0.35 * peak
+        )
+
+    else:
+
+        winner_power = 0.0
+
     glow_score = winner_power
 
-    #######NEW CODE FOR YELLOW GLOW SCORING#######
-    
-    if winner_color == "YELLOW":
-        yellow_values = hsv[:, :, 2][masks["YELLOW"] > 0]
-        if yellow_values.size > 0:
-            hot_ratio = float(np.mean(yellow_values >= YELLOW_HOT_PIXEL_VALUE))
-            superhot_ratio = float(np.mean(yellow_values >= YELLOW_SUPERHOT_PIXEL_VALUE))
-        else:
-            hot_ratio = 0.0
-            superhot_ratio = 0.0
-
-        white_core_ratio = cv2.countNonZero(yellow_white_core) / max(roi_area, 1)
-
-        # Final yellow ranking heavily favors distributed illumination.
-        glow_score += 120.0 * white_core_ratio
-        glow_score += 60.0 * hot_ratio
-        glow_score += 45.0 * superhot_ratio
+    # --------------------------------------------------------
+    # Final bulb location
+    # --------------------------------------------------------
 
     precise_box = get_precise_bulb_box(
         frame,
@@ -716,69 +893,89 @@ def analyze_candidate_roi(frame, box):
         winner_color
     )
 
-    x, y, box_w, box_h = precise_box
+    px, py, pw, ph = precise_box
 
-    center_x = x + box_w // 2
-    center_y = y + box_h // 2
+    center_x = (
+        px + pw // 2
+    )
+
+    center_y = (
+        py + ph // 2
+    )
 
     return {
         "object": f"TRAFFIC_LIGHT_{winner_color}",
         "color": winner_color,
         "box": precise_box,
-        "center": (center_x, center_y),
+        "center": (
+            center_x,
+            center_y
+        ),
         "power": winner_power,
         "glow_score": glow_score
     }
 
 
+# ============================================================
+# Main Traffic-Light Detector
+# ============================================================
+
 def detect_traffic_light(frame):
-    """Detect the strongest valid traffic light."""
+    """
+    Detect the strongest valid traffic light in the frame.
+
+    Returns a detection dictionary for RED, YELLOW, or GREEN,
+    or None when no valid traffic light is found.
+    """
 
     global last_detection
     global last_analysis_time
 
     current_time = time.time()
 
+    # Temporarily reuse the most recent detection.
     if (
         last_detection is not None
-        and current_time - last_analysis_time < HOLD_TIME
+        and current_time - last_analysis_time
+        < HOLD_TIME
     ):
         return last_detection
 
-    candidates = find_bright_candidates(frame)
+    candidates = find_bright_candidates(
+        frame
+    )
 
     valid_lights = []
 
     for box in candidates:
+
         result = analyze_candidate_roi(
             frame,
             box
         )
 
         if result is not None:
-            valid_lights.append(result)
+            valid_lights.append(
+                result
+            )
 
     if not valid_lights:
+
         last_detection = None
         last_analysis_time = current_time
+
         return None
 
-    # Pick the candidate that behaves most like an actual illuminated bulb.
-    # For yellow this favors a broad hot/white core instead of a shiny button.
+    # If multiple valid lights exist, choose the strongest illuminated bulb.
     best_light = max(
         valid_lights,
-        key=lambda light: light.get("glow_score", light["power"])
+        key=lambda light: light.get(
+            "glow_score",
+            light["power"]
+        )
     )
 
     last_detection = best_light
     last_analysis_time = current_time
-
-    color = best_light["color"]
-    center_x, center_y = best_light["center"]
-
-    print(
-        f"{color} TRAFFIC LIGHT DETECTED | "
-        f"Center: ({center_x}, {center_y})"
-    )
 
     return best_light
