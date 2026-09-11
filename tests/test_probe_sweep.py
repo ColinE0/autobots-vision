@@ -62,7 +62,7 @@ def fake_camera(monkeypatch):
 
 
 def test_sweep_walks_every_exposure_and_reopens_the_camera(fake_camera):
-    rows = probe_hsv.sweep([8000, 4000], 0.05, Log())
+    rows, _ = probe_hsv.sweep([8000, 4000], 0.05, Log())
     exposures = [x for x in fake_camera if isinstance(x, int)]
     cams = [x for x in fake_camera if isinstance(x, FakeCam)]
     assert exposures == [8000, 4000]
@@ -71,7 +71,7 @@ def test_sweep_walks_every_exposure_and_reopens_the_camera(fake_camera):
 
 
 def test_sweep_reports_the_red_lamp_it_was_shown(fake_camera):
-    rows = probe_hsv.sweep([4000], 0.05, Log())
+    rows, _ = probe_hsv.sweep([4000], 0.05, Log())
     red = [r for r in rows if r['colour'] == 'red']
     assert len(red) == 1
     r = red[0]
@@ -81,8 +81,26 @@ def test_sweep_reports_the_red_lamp_it_was_shown(fake_camera):
     assert r['core'] > 0                     # the clipped core is measured
 
 
-def test_report_survives_a_sweep_that_saw_nothing():
-    # A sweep in a dark room with no prop must print a table, not raise.
+def test_sweep_measures_the_scene_even_with_no_coloured_blob(fake_camera):
+    # A dark frame yields no blob. The scene numbers are then the ONLY
+    # evidence, and without them an empty table cannot be read.
+    rows, scenes = probe_hsv.sweep([4000], 0.05, Log())
+    assert [s['us'] for s in scenes] == [4000]
+    assert scenes[0]['peak_v'] is not None
+
+
+def test_report_names_which_empty_result_it_is():
+    # "Nothing detected" must distinguish an unlit scene from a lamp the
+    # exposures all missed, or a venue trip produces an unreadable table.
     log = Log()
-    probe_hsv.report_sweep([], log)
+    probe_hsv.report_sweep([], [{'us': 4000, 'frames': 100,
+                                 'centre_v': 3, 'peak_v': 9}], log=log)
+    blob = ' '.join(log.lines)
+    assert 'no red, yellow or green blob' in blob
+    assert 'nothing lit' in blob
+
+
+def test_report_survives_a_sweep_with_no_data_at_all():
+    log = Log()
+    probe_hsv.report_sweep([], (), log=log)
     assert any('exposure' in line for line in log.lines)

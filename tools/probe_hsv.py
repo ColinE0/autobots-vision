@@ -83,6 +83,7 @@ def _median(vals):
 def sweep(exposures, dwell, log):
     """Hold each fixed exposure for dwell seconds and tabulate what it gives."""
     rows = []
+    scenes = []
     for us in exposures:
         config.CAMERA_EXPOSURE_US = us
         # Reopened per step rather than set live, so each row is exactly what a
@@ -91,6 +92,8 @@ def sweep(exposures, dwell, log):
         probe = Probe(config)
         det = make_detector(config)
         seen = {c: [] for c in COLOURS}
+        centre = []
+        peak = []
         fails = {c: [] for c in COLOURS}
         confirmed = {c: 0 for c in COLOURS}
         frames = 0
@@ -104,6 +107,10 @@ def sweep(exposures, dwell, log):
                     continue
                 last_id = fid
                 frames += 1
+                centre.append(centre_hsv(frame))
+                # Brightest pixel anywhere. With no blob this is the only
+                # evidence of whether the frame held anything at all.
+                peak.append(int(frame.max()))
                 stats = probe.measure(frame)
                 for colour in COLOURS:
                     st = stats.get(colour)
@@ -117,6 +124,12 @@ def sweep(exposures, dwell, log):
                         confirmed[key] += 1
         finally:
             cam.close()
+        scene = {
+            'us': us, 'frames': frames,
+            'centre_v': _median([c[2] for c in centre]),
+            'peak_v': _median(peak),
+        }
+        scenes.append(scene)
         for colour in COLOURS:
             st = seen[colour]
             if not st and not confirmed[colour]:
@@ -133,14 +146,14 @@ def sweep(exposures, dwell, log):
                 "fail": worst[0][0] if worst else "-",
             })
         log.line(f"exposure {us} us: {frames} frames")
-    return rows
+    return rows, scenes
 
 
 def _fmt(v):
     return '-' if v is None else f'{v:.0f}'
 
 
-def report_sweep(rows, log):
+def report_sweep(rows, scenes=(), log=None):
     header = (f"{'exposure':>9}{'col':>4}{'blob%':>7}{'det%':>6}"
               f"{'area':>8}{'S':>6}{'V':>6}{'bright':>8}{'core':>6}"
               "  most common failure")
@@ -154,6 +167,26 @@ def report_sweep(rows, log):
                 f"{area:>8}{_fmt(r['s']):>6}{_fmt(r['v']):>6}"
                 f"{_fmt(r['bright']):>8}{_fmt(r['core']):>6}  {r['fail']}")
         print(log.line(line, echo=False), flush=True)
+    if not rows:
+        # An empty table is a result too, but it has to say which result.
+        # Without the scene numbers there is no way to tell "no prop in
+        # frame" from "prop there, every exposure too short".
+        print(log.line('  no red, yellow or green blob at ANY exposure.', echo=False),
+              flush=True)
+    if scenes:
+        print()
+        print(log.line(f"{'exposure':>9}{'frames':>8}{'centre V':>10}{'peak V':>8}"
+                       "   scene", echo=False), flush=True)
+        for s in scenes:
+            peak = s['peak_v'] or 0
+            if peak < 40:
+                note = 'black: nothing lit, or every exposure far too short'
+            elif peak < 200:
+                note = 'dim: no clipped highlight, so no lamp core to find'
+            else:
+                note = 'something in frame is at or near clipping'
+            print(log.line(f"{s['us']:>9}{s['frames']:>8}{_fmt(s['centre_v']):>10}"
+                           f"{_fmt(s['peak_v']):>8}   {note}", echo=False), flush=True)
     print()
 
 
@@ -172,7 +205,7 @@ def main():
         log = SessionLog('probe_hsv', f'sweep={steps} dwell={dwell}')
         print(f'sweeping {steps} us, {dwell:g}s each. Hold the prop still.')
         try:
-            report_sweep(sweep(steps, dwell, log), log)
+            report_sweep(*sweep(steps, dwell, log), log=log)
         finally:
             log.close()
         return
