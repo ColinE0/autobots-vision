@@ -23,7 +23,8 @@ tools/      bench scripts. tools/range_check.py is the live ToF readout,
             draws boxes), tools/test_camera.py is the backend-switched
             camera + detector smoke test (prints FPS and labels) that saves
             a still on every label change, and tools/replay.py to run a
-            recorded clip back through the detector
+            recorded clip back through the detector, and tools/probe_hsv.py
+            --sweep to find a fixed exposure that works in a venue
 ```
 
 The tests run on any machine, no sensor needed, a fake stands in for it:
