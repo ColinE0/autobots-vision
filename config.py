@@ -105,6 +105,20 @@ CAMERA_EV = 0.0
 # serve both, tuned so a sign still clears SIGN_V_MIN in the dimmest venue while
 # the lamp still clips. If no single value works, alternate exposures per frame.
 # Find it with tools/test_camera.py --exposure <us> IN THE VENUE, then set here.
+# The camera is mounted upside down on the chassis, confirmed 2026-09-11 by
+# looking at a saved frame. Unrotated, DETECT_IGNORE_BOTTOM_FRAC deletes the TOP
+# quarter of the real scene, where a hanging light is, and searches the floor for
+# red instead. Set False if the camera is ever remounted upright: two rotations
+# cancel into exactly the fault this exists to fix.
+#
+# THIS LINE HAS BEEN DELETED ONCE ALREADY (b4e56c9, 2026-09-11), by an unrelated
+# edit that removed the block below it and took this with it. Nothing failed, no
+# test broke, and the camera simply went back to being upside down for an hour,
+# because hardware/camera.py reads it with a getattr default of False. The tests
+# now assert on the FRAME the caller receives rather than on what was asked of
+# libcamera, so a missing flag shows up as a failure.
+CAMERA_ROTATE_180 = True
+
 CAMERA_EXPOSURE_US = None
 CAMERA_ANALOGUE_GAIN = 1.0   # sensor gain while fixed; raise only if 1.0 is dark
 

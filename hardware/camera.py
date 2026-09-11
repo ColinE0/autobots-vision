@@ -128,21 +128,19 @@ class UsbCamera:
         self._cap.release()
 
 
-def _rotation_transform(cfg):
-    """180 rotation for an upside-down mount, applied by the ISP."""
-    if not getattr(cfg, 'CAMERA_ROTATE_180', False):
-        return None
-    try:
-        from libcamera import Transform   # comes with python3-picamera2
-    except ImportError:
-        # Off-Pi only, which means the suite. On real hardware picamera2
-        # itself would have failed to import long before this line, so
-        # this can never quietly drop the rotation on the robot.
-        return None
-    # Both axes, always. A vflip alone is a mirror, not a rotation: left and
-    # right swap, and every centring gate in the detector then judges a world
-    # that does not exist. Free here; a per-frame cv2.flip is not.
-    return Transform(hflip=1, vflip=1)
+def _rotates(cfg):
+    """True when the frame must be turned 180 for the upside-down mount."""
+    return bool(getattr(cfg, 'CAMERA_ROTATE_180', False))
+
+
+# Why this is a cv2.flip and not a libcamera Transform. The first attempt
+# (2026-09-11) passed Transform(hflip=1, vflip=1) in the stream configuration, and
+# whether that works was never established: the config flag was deleted by an
+# unrelated edit hours later, so every run after it was inverted again with nothing
+# failing and no test breaking. The flip is used now because it is verifiable off
+# the Pi: a test can assert on the frame the caller receives, where a transform
+# handed to libcamera can only be asserted as a request. At 320x240 it costs a
+# fraction of a millisecond, which is cheaper than a second silent regression.
 
 
 class CsiCamera:
@@ -177,10 +175,7 @@ class CsiCamera:
         if sensor is not None:
             stream_kw['raw'] = {'size': tuple(sensor)}
         self.sensor_size = None if sensor is None else tuple(sensor)
-        transform = _rotation_transform(cfg)
-        if transform is not None:
-            stream_kw['transform'] = transform
-        self.rotated = transform is not None
+        self.rotated = _rotates(cfg)
         stream = self._picam.create_video_configuration(**stream_kw)
         self._picam.configure(stream)
         self._picam.start()
@@ -190,6 +185,8 @@ class CsiCamera:
             frame = self._picam.capture_array('main', wait=_FIRST_FRAME_TIMEOUT_S)
         except TimeoutError:
             frame = None
+        if frame is not None and frame.size and self.rotated:
+            frame = cv2.flip(frame, -1)
         if frame is None or frame.size == 0:
             raise RuntimeError(
                 'CSI camera started but the first capture failed. Check the '
@@ -278,6 +275,8 @@ class CsiCamera:
                 frame = self._picam.capture_array('main')
             except Exception:
                 frame = None             # stopped mid-capture, or a glitch
+            if frame is not None and self.rotated:
+                frame = cv2.flip(frame, -1)   # -1 = both axes = 180
             if frame is None:
                 if self._run:
                     time.sleep(0.05)     # transient capture error; keep trying

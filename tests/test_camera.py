@@ -18,7 +18,7 @@ from tests.conftest import make_cfg
 class FakePicamera2:
     """Minimal stand-in for picamera2.Picamera2."""
 
-    def __init__(self, frames=1, first_frame_none=False, frame_delay=0.0):
+    def __init__(self, frames=1, first_frame_none=False, frame_delay=0.0, frame=None):
         self.video_config = None
         self.started = False
         self.closed = False
@@ -29,6 +29,7 @@ class FakePicamera2:
         self._first_none = first_frame_none
         self._frame_delay = frame_delay     # per-frame pacing, like a real sensor
         self._stopped = threading.Event()
+        self._served = frame
 
     def create_video_configuration(self, main=None, controls=None, raw=None,
                                    transform=None):
@@ -49,7 +50,8 @@ class FakePicamera2:
             self._frames_left -= 1
             if self._frame_delay:
                 time.sleep(self._frame_delay)
-            return np.zeros((240, 320, 3), np.uint8)
+            return (self._served if self._served is not None
+                    else np.zeros((240, 320, 3), np.uint8))
         # out of frames: block like real hardware until stop()
         self._stopped.wait(timeout=5.0)
         raise RuntimeError('camera stopped')
@@ -296,32 +298,30 @@ def test_csi_first_capture_failure_raises():
 
 
 
-def test_csi_rotates_on_the_isp_when_the_mount_is_upside_down(monkeypatch):
-    # The chassis mount inverts the camera. Correcting it in the stream
-    # configuration costs nothing; flipping every frame in OpenCV would.
-    monkeypatch.setattr(camera_mod, '_rotation_transform',
-                        lambda cfg: 'hflip+vflip' if cfg.CAMERA_ROTATE_180 else None)
-    fake = FakePicamera2()
+def test_csi_rotates_every_frame_when_the_mount_is_upside_down():
+    # The ISP transform was tried first and is silently dropped when the raw
+    # stream is pinned, so the frames the CALLER gets are what must be checked,
+    # not what was asked of libcamera.
+    marked = np.zeros((240, 320, 3), np.uint8)
+    marked[0, 0] = 255                      # top-left corner only
+    fake = FakePicamera2(frames=1, frame=marked)
     cam = CsiCamera(make_cfg(CAMERA_ROTATE_180=True), _picam2=fake)
+    _, frame = cam.read()
     cam.close()
-    assert fake.video_config['transform'] == 'hflip+vflip'
+    assert frame[239, 319].tolist() == [255, 255, 255], "mark must move to bottom-right"
+    assert frame[0, 0].tolist() == [0, 0, 0]
     assert cam.rotated is True
 
 
-def test_csi_sends_no_transform_when_the_mount_is_upright(monkeypatch):
-    monkeypatch.setattr(camera_mod, '_rotation_transform', lambda cfg: None)
-    fake = FakePicamera2()
+def test_csi_leaves_frames_alone_when_the_mount_is_upright():
+    marked = np.zeros((240, 320, 3), np.uint8)
+    marked[0, 0] = 255
+    fake = FakePicamera2(frames=1, frame=marked)
     cam = CsiCamera(make_cfg(CAMERA_ROTATE_180=False), _picam2=fake)
+    _, frame = cam.read()
     cam.close()
-    assert fake.video_config['transform'] is None
+    assert frame[0, 0].tolist() == [255, 255, 255]
     assert cam.rotated is False
-
-
-def test_rotation_transform_is_skipped_entirely_when_the_flag_is_off():
-    # Guards the lazy libcamera import: off-Pi the module is absent, so a
-    # config with the flag clear must never reach the import at all.
-    assert camera_mod._rotation_transform(make_cfg(CAMERA_ROTATE_180=False)) is None
-
 
 def test_fixed_exposure_pins_from_the_configuration_not_a_later_lock(monkeypatch):
     # The FIRST frame has to be at the fixed value. Pinning it after start would
@@ -372,3 +372,12 @@ def test_fixed_exposure_rejects_nonsense():
 
 def test_no_fixed_exposure_keeps_the_metering_path():
     assert camera_mod._fixed_exposure_controls(make_cfg(CAMERA_EXPOSURE_US=None)) == {}
+
+
+def test_shipped_config_still_carries_the_rotation_flag():
+    # Regression guard. CAMERA_ROTATE_180 was deleted once by an unrelated edit
+    # (b4e56c9) and nothing caught it, because camera.py reads it with a getattr
+    # default of False: the camera just went back to being upside down. Assert on
+    # the real config module, not on make_cfg's copy.
+    import config as shipped
+    assert getattr(shipped, 'CAMERA_ROTATE_180', None) is True
